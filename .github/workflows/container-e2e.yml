@@ -1,0 +1,73 @@
+name: Container E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  docker-e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t heavy-write-db .
+
+      - name: Start container
+        run: |
+          docker run -d --name heavy-write-db -p 8080:8080 heavy-write-db
+
+      - name: Wait for API
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/stats >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs heavy-write-db
+          exit 1
+
+      - name: Run E2E checks
+        run: |
+          set -euo pipefail
+
+          curl -fsS -X PUT http://localhost:8080/kv/apple \
+            -H 'Content-Type: application/json' \
+            -d '{"value":"red"}' >/dev/null
+
+          curl -fsS -X PUT http://localhost:8080/kv/banana \
+            -H 'Content-Type: application/json' \
+            -d '{"value":"yellow"}' >/dev/null
+
+          curl -fsS -X PUT http://localhost:8080/kv/carrot \
+            -H 'Content-Type: application/json' \
+            -d '{"value":"orange"}' >/dev/null
+
+          point=$(curl -fsS http://localhost:8080/kv/apple)
+          range=$(curl -fsS 'http://localhost:8080/kv/range?start=a&end=c&limit=10')
+          stats=$(curl -fsS http://localhost:8080/stats)
+
+          POINT="$point" RANGE="$range" STATS="$stats" python3 - <<'PY'
+import json
+import os
+
+point = json.loads(os.environ["POINT"])
+range_payload = json.loads(os.environ["RANGE"])
+stats = json.loads(os.environ["STATS"])
+
+assert point["key"] == "apple"
+assert point["value"] == "red"
+assert [row["key"] for row in range_payload["value"]] == ["apple", "banana"]
+assert [row["value"] for row in range_payload["value"]] == ["red", "yellow"]
+assert stats["sstableCount"] >= 0
+assert stats["flushThreshold"] == 100
+PY
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f heavy-write-db
