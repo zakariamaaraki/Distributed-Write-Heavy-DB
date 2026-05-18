@@ -17,16 +17,11 @@ public sealed class LsmStore
 {
     private static readonly JsonSerializerOptions WalJsonOptions = new(JsonSerializerDefaults.Web);
 
-    private static readonly JsonSerializerOptions TableJsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = true
-    };
-
     private readonly LsmStoreOptions _options;
     private readonly OrderedMemTable _memTable = new();
     private readonly SemaphoreSlim _mutex = new(1, 1);
+    private readonly SstableStore _sstables;
     private readonly string _walPath;
-    private readonly string _sstableDirectory;
 
     private bool _initialized;
     private long _lastSequence;
@@ -39,8 +34,8 @@ public sealed class LsmStore
         }
 
         _options = options;
+        _sstables = new SstableStore(options.DataPath);
         _walPath = Path.Combine(options.DataPath, "wal.log");
-        _sstableDirectory = Path.Combine(options.DataPath, "sstables");
     }
 
     public async Task InitializeAsync()
@@ -54,7 +49,6 @@ public sealed class LsmStore
             }
 
             Directory.CreateDirectory(_options.DataPath);
-            Directory.CreateDirectory(_sstableDirectory);
 
             _lastSequence = await FindMaxSequenceAsync();
 
@@ -129,19 +123,17 @@ public sealed class LsmStore
             }
 
             StoredRecord? newest = null;
-            foreach (var file in GetSstableFilesNewestFirst())
+            foreach (var file in _sstables.GetDataFilesNewestFirst())
             {
-                foreach (var record in await ReadSstableAsync(file))
+                var record = await _sstables.TryGetAsync(file, key);
+                if (record is null)
                 {
-                    if (record.Key != key)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (newest is null || record.Sequence > newest.Sequence)
-                    {
-                        newest = record;
-                    }
+                if (newest is null || record.Sequence > newest.Sequence)
+                {
+                    newest = record;
                 }
             }
 
@@ -169,9 +161,9 @@ public sealed class LsmStore
                 KeepNewest(latestByKey, record);
             }
 
-            foreach (var file in GetSstableFilesNewestFirst())
+            foreach (var file in _sstables.GetDataFilesNewestFirst())
             {
-                foreach (var record in await ReadSstableAsync(file))
+                foreach (var record in await _sstables.ReadTableAsync(file))
                 {
                     if (IsInsideRange(record.Key, start, end))
                     {
@@ -201,7 +193,7 @@ public sealed class LsmStore
 
             return new StoreStats(
                 _memTable.Count,
-                GetSstableFilesNewestFirst().Count,
+                await _sstables.CountAsync(),
                 _lastSequence,
                 _options.FlushThreshold);
         }
@@ -230,7 +222,7 @@ public sealed class LsmStore
             return;
         }
 
-        await WriteSstableAsync(snapshot);
+        await _sstables.WriteTableAsync(snapshot);
         _memTable.Clear();
         await ClearWalAsync();
         await CompactAsync();
@@ -238,7 +230,7 @@ public sealed class LsmStore
 
     private async Task CompactAsync()
     {
-        var files = GetSstableFilesNewestFirst();
+        var files = _sstables.GetDataFilesNewestFirst();
         if (files.Count == 0)
         {
             return;
@@ -247,7 +239,7 @@ public sealed class LsmStore
         var newestByKey = new SortedDictionary<string, StoredRecord>(StringComparer.Ordinal);
         foreach (var file in files)
         {
-            foreach (var record in await ReadSstableAsync(file))
+            foreach (var record in await _sstables.ReadTableAsync(file))
             {
                 KeepNewest(newestByKey, record);
             }
@@ -259,22 +251,19 @@ public sealed class LsmStore
 
         if (liveRecords.Count > 0)
         {
-            await WriteSstableAsync(liveRecords);
+            await _sstables.WriteTableAsync(liveRecords);
         }
 
-        foreach (var file in files)
-        {
-            File.Delete(file);
-        }
+        await _sstables.DeleteTablesAsync(files);
     }
 
     private async Task<long> FindMaxSequenceAsync()
     {
         var maxSequence = 0L;
 
-        foreach (var file in GetSstableFilesNewestFirst())
+        foreach (var file in _sstables.GetDataFilesNewestFirst())
         {
-            foreach (var record in await ReadSstableAsync(file))
+            foreach (var record in await _sstables.ReadTableAsync(file))
             {
                 maxSequence = Math.Max(maxSequence, record.Sequence);
             }
@@ -373,37 +362,6 @@ public sealed class LsmStore
         }
 
         return true;
-    }
-
-    private async Task WriteSstableAsync(IReadOnlyList<StoredRecord> records)
-    {
-        var tableName = $"sstable-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfffffff}-{Guid.NewGuid():N}.json";
-        var finalPath = Path.Combine(_sstableDirectory, tableName);
-        var tempPath = finalPath + ".tmp";
-        var json = JsonSerializer.Serialize(records, TableJsonOptions);
-
-        await File.WriteAllTextAsync(tempPath, json, Encoding.UTF8);
-        File.Move(tempPath, finalPath, overwrite: true);
-    }
-
-    private async Task<IReadOnlyList<StoredRecord>> ReadSstableAsync(string path)
-    {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var records = await JsonSerializer.DeserializeAsync<List<StoredRecord>>(stream, TableJsonOptions);
-        return records ?? [];
-    }
-
-    private List<string> GetSstableFilesNewestFirst()
-    {
-        if (!Directory.Exists(_sstableDirectory))
-        {
-            return [];
-        }
-
-        return Directory
-            .EnumerateFiles(_sstableDirectory, "sstable-*.json")
-            .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
-            .ToList();
     }
 
     private static void KeepNewest(SortedDictionary<string, StoredRecord> records, StoredRecord candidate)

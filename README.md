@@ -60,9 +60,11 @@ Each flush creates one immutable sorted string table on disk.
 Records are written in key order, which makes range queries possible without
 loading the whole database into memory.
 
-To keep this implementation simple, SSTables are JSON files containing sorted
-records. A production implementation would use a binary format with sparse
-indexes, but that is intentionally out of scope here.
+Each SSTable has a companion Bloom filter sidecar file. Point reads check the
+Bloom filter before opening the data file, which avoids unnecessary file reads
+for keys that are definitely absent.
+
+SSTable data is still stored as JSON so the implementation stays easy to inspect.
 
 ### Compaction
 
@@ -110,6 +112,7 @@ Runtime data lives under `data/`:
 
 - `data/wal.log`: pending writes not yet flushed.
 - `data/sstables/*.json`: immutable sorted tables.
+- `data/sstables/*.bloom.json`: Bloom filter sidecars for SSTables.
 
 ## Testing
 
@@ -142,6 +145,5 @@ docker run --rm -p 8080:8080 heavy-write-db
 - No replication.
 - No background compaction.
 - No custom binary SSTable format.
-- No Bloom filters or sparse indexes.
 
 Those can be added later, but they would make the first version harder to read.
