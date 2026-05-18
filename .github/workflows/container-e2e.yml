@@ -54,7 +54,7 @@ jobs:
           stats=$(curl -fsS http://localhost:8080/stats)
 
           echo "$point" | jq -e '.key == "apple" and .value == "red"' >/dev/null
-          echo "$range" | jq -e '.value | map(.key) == ["apple", "banana"] and map(.value) == ["red", "yellow"]' >/dev/null
+          echo "$range" | jq -e 'map(.key) == ["apple", "banana"] and map(.value) == ["red", "yellow"]' >/dev/null
           echo "$stats" | jq -e '.flushThreshold == 100 and .sstableCount >= 0' >/dev/null
 
       - name: Stop container
