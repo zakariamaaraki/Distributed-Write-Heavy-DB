@@ -1,0 +1,7 @@
+bin/
+obj/
+data/
+tests/
+server.log
+server.err.log
+.git/

@@ -1,8 +1,6 @@
-# Simple LSM Write Database
+# Simple LSM-based Heavy Write Database
 
 This project is a small C# REST API backed by a write-optimized key/value store.
-It uses the core ideas of an LSM tree without adding background workers, multiple
-levels, Bloom filters, or a custom binary file format.
 
 ## Goals
 
@@ -10,7 +8,6 @@ levels, Bloom filters, or a custom binary file format.
 - Support point reads and range reads.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
-- Keep the first implementation easy to inspect.
 
 ## Data Model
 
@@ -122,6 +119,20 @@ Run them with:
 
 ```bash
 dotnet test .\tests\LsmWriteDb.Tests\LsmWriteDb.Tests.csproj
+```
+
+## Docker
+
+Build the image:
+
+```bash
+docker build -t heavy-write-db .
+```
+
+Run the container:
+
+```bash
+docker run --rm -p 8080:8080 heavy-write-db
 ```
 
 ## Non-Goals
