@@ -1,0 +1,136 @@
+# Simple LSM Write Database
+
+This project is a small C# REST API backed by a write-optimized key/value store.
+It uses the core ideas of an LSM tree without adding background workers, multiple
+levels, Bloom filters, or a custom binary file format.
+
+## Goals
+
+- Optimize for frequent writes.
+- Support point reads and range reads.
+- Flush in-memory data to disk when a size threshold is reached.
+- Run compaction immediately after every flush.
+- Keep the first implementation easy to inspect.
+
+## Data Model
+
+The database stores string keys and string values.
+
+Deletes are represented as tombstones so inserts, updates, and deletes can all
+move through the same write path.
+
+Keys are ordered using ordinal string comparison. Range queries use that same
+ordering.
+
+## HTTP API
+
+- `PUT /kv/{key}`: create or update a value.
+- `GET /kv/{key}`: fetch a single value.
+- `DELETE /kv/{key}`: delete a key.
+- `GET /kv/range?start=a&end=z&limit=100`: return keys in sorted order.
+- `GET /stats`: inspect simple store statistics.
+
+## Components
+
+### Write-Ahead Log
+
+Every write is appended to a write-ahead log before it is applied to memory.
+On startup, the log is replayed so acknowledged writes are not lost.
+
+The log is reset after the current memtable is flushed to disk.
+
+### Ordered MemTable
+
+The memtable must support sorted iteration, so it is not a hash dictionary.
+It is an ordered in-memory table keyed by string.
+
+For this simple C# version, the implementation can wrap a `SortedDictionary`
+because .NET's `SortedDictionary` is a tree-backed ordered map, not a hash table.
+The rest of the code should depend on a small `MemTable` abstraction so the
+internal structure can later be replaced with a skip list or B-tree without
+changing the API or storage engine.
+
+The memtable supports:
+
+- single-key lookup,
+- insert/update/delete by key,
+- sorted range scans from `start` to `end`,
+- snapshotting sorted records during flush.
+
+### SSTables
+
+Each flush creates one immutable sorted string table on disk.
+Records are written in key order, which makes range queries possible without
+loading the whole database into memory.
+
+To keep this implementation simple, SSTables are JSON files containing sorted
+records. A production implementation would use a binary format with sparse
+indexes, but that is intentionally out of scope here.
+
+### Compaction
+
+Compaction runs immediately after each flush.
+
+The compactor reads all SSTables, keeps only the newest record for each key,
+drops tombstoned keys, and writes one compacted SSTable. The old SSTables are
+then removed.
+
+This keeps read and range-query amplification low while avoiding a full leveled
+LSM implementation.
+
+## Write Path
+
+1. API receives a `PUT` or `DELETE`.
+2. Store appends the operation to the write-ahead log.
+3. Store applies the operation to the ordered memtable.
+4. If the memtable reaches the flush threshold:
+   - write the memtable as a new SSTable,
+   - clear the write-ahead log,
+   - compact all SSTables into one SSTable.
+
+## Point Read Path
+
+1. Check the memtable first.
+2. If the key is tombstoned, return not found.
+3. If not found in memory, scan SSTables from newest to oldest.
+4. Return the newest non-tombstoned value, or not found.
+
+## Range Read Path
+
+1. Read the sorted memtable range.
+2. Read matching sorted ranges from SSTables.
+3. Merge records by key.
+4. Keep the newest sequence number for each key.
+5. Drop tombstoned keys.
+6. Return up to `limit` records in sorted key order.
+
+Because compaction runs after every flush, the usual case is one SSTable plus the
+active memtable.
+
+## Storage Layout
+
+Runtime data lives under `data/`:
+
+- `data/wal.log`: pending writes not yet flushed.
+- `data/sstables/*.json`: immutable sorted tables.
+
+## Testing
+
+Unit tests live under `tests/LsmWriteDb.Tests`.
+
+Run them with:
+
+```bash
+dotnet test .\tests\LsmWriteDb.Tests\LsmWriteDb.Tests.csproj
+```
+
+## Non-Goals
+
+- No SQL layer.
+- No multi-key transactions.
+- No replication.
+- No background compaction.
+- No custom binary SSTable format.
+- No Bloom filters or sparse indexes.
+
+Those can be added later, but they would make the first version harder to read.
