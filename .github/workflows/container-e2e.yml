@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   docker-e2e:
@@ -52,21 +53,9 @@ jobs:
           range=$(curl -fsS 'http://localhost:8080/kv/range?start=a&end=c&limit=10')
           stats=$(curl -fsS http://localhost:8080/stats)
 
-          POINT="$point" RANGE="$range" STATS="$stats" python3 - <<'PY'
-import json
-import os
-
-point = json.loads(os.environ["POINT"])
-range_payload = json.loads(os.environ["RANGE"])
-stats = json.loads(os.environ["STATS"])
-
-assert point["key"] == "apple"
-assert point["value"] == "red"
-assert [row["key"] for row in range_payload["value"]] == ["apple", "banana"]
-assert [row["value"] for row in range_payload["value"]] == ["red", "yellow"]
-assert stats["sstableCount"] >= 0
-assert stats["flushThreshold"] == 100
-PY
+          echo "$point" | jq -e '.key == "apple" and .value == "red"' >/dev/null
+          echo "$range" | jq -e '.value | map(.key) == ["apple", "banana"] and map(.value) == ["red", "yellow"]' >/dev/null
+          echo "$stats" | jq -e '.flushThreshold == 100 and .sstableCount >= 0' >/dev/null
 
       - name: Stop container
         if: always()
