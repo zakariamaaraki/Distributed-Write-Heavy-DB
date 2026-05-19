@@ -1,0 +1,149 @@
+name: Raft Cluster E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  raft-cluster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start three-node cluster
+        run: docker compose -f docker-compose.yml up -d --build
+
+      - name: Wait for APIs
+        run: |
+          set -euo pipefail
+
+          for port in 8081 8082 8083; do
+            for i in $(seq 1 60); do
+              if curl -fsS "http://localhost:${port}/stats" >/dev/null; then
+                break
+              fi
+
+              if [ "$i" -eq 60 ]; then
+                docker compose -f docker-compose.yml logs
+                exit 1
+              fi
+
+              sleep 1
+            done
+          done
+
+      - name: Verify leader election
+        run: |
+          set -euo pipefail
+
+          states_file="$(mktemp)"
+          normalized_file="$(mktemp)"
+
+          for i in $(seq 1 90); do
+            : > "$states_file"
+
+            for port in 8081 8082 8083; do
+              curl -fsS "http://localhost:${port}/raft/state" |
+                jq --argjson port "$port" '. + { port: $port }' >> "$states_file"
+            done
+
+            jq -s '
+              def roleName:
+                if .role == "Leader" or .role == 2 then "Leader"
+                elif .role == "Follower" or .role == 0 then "Follower"
+                elif .role == "Candidate" or .role == 1 then "Candidate"
+                else "Unknown"
+                end;
+
+              map(. + { roleName: roleName })
+            ' "$states_file" > "$normalized_file"
+
+            leaders="$(jq '[.[] | select(.roleName == "Leader")] | length' "$normalized_file")"
+            followers="$(jq '[.[] | select(.roleName == "Follower")] | length' "$normalized_file")"
+            candidates="$(jq '[.[] | select(.roleName == "Candidate")] | length' "$normalized_file")"
+            leader_ids="$(jq '[.[] | .leaderId] | unique | length' "$normalized_file")"
+            null_leaders="$(jq '[.[] | select(.leaderId == null)] | length' "$normalized_file")"
+
+            if [ "$leaders" -eq 1 ] && [ "$followers" -eq 2 ] && [ "$candidates" -eq 0 ] && [ "$leader_ids" -eq 1 ] && [ "$null_leaders" -eq 0 ]; then
+              cat "$normalized_file"
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          echo "Raft cluster did not stabilize with exactly one leader and two followers."
+          cat "$normalized_file"
+          docker compose -f docker-compose.yml logs
+          exit 1
+
+      - name: Verify write leader and follower replication
+        run: |
+          set -euo pipefail
+
+          states_file="$(mktemp)"
+          for port in 8081 8082 8083; do
+            curl -fsS "http://localhost:${port}/raft/state" |
+              jq --argjson port "$port" '. + { port: $port }' >> "$states_file"
+          done
+
+          normalized="$(jq -s '
+            def roleName:
+              if .role == "Leader" or .role == 2 then "Leader"
+              elif .role == "Follower" or .role == 0 then "Follower"
+              elif .role == "Candidate" or .role == 1 then "Candidate"
+              else "Unknown"
+              end;
+
+            map(. + { roleName: roleName })
+          ' "$states_file")"
+
+          leader_port="$(echo "$normalized" | jq -r '.[] | select(.roleName == "Leader") | .port')"
+          follower_ports="$(echo "$normalized" | jq -r '.[] | select(.roleName == "Follower") | .port')"
+
+          curl -fsS -X PUT "http://localhost:${leader_port}/kv/raft-ci-key" \
+            -H 'Content-Type: application/json' \
+            -d '{"value":"replicated-from-leader"}' >/dev/null
+
+          for port in $follower_ports; do
+            status="$(curl -sS -o /tmp/follower-write.json -w '%{http_code}' \
+              -X PUT "http://localhost:${port}/kv/raft-ci-rejected" \
+              -H 'Content-Type: application/json' \
+              -d '{"value":"should-not-write"}')"
+
+            if [ "$status" -ne 409 ]; then
+              echo "Expected follower on port ${port} to reject writes with 409, got ${status}."
+              cat /tmp/follower-write.json
+              exit 1
+            fi
+          done
+
+          for i in $(seq 1 60); do
+            replicated=1
+
+            for port in $follower_ports; do
+              if ! curl -fsS "http://localhost:${port}/kv/raft-ci-key" |
+                jq -e '.key == "raft-ci-key" and .value == "replicated-from-leader"' >/dev/null; then
+                replicated=0
+              fi
+            done
+
+            if [ "$replicated" -eq 1 ]; then
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          echo "Followers did not replicate the leader write."
+          docker compose -f docker-compose.yml logs
+          exit 1
+
+      - name: Stop cluster
+        if: always()
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans

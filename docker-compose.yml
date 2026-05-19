@@ -1,0 +1,54 @@
+x-lsm-node-env: &lsm-node-env
+  ASPNETCORE_URLS: http://+:8080
+  Lsm__FlushThreshold: 100
+  Raft__Enabled: "true"
+  Raft__ElectionTimeoutMinMilliseconds: 800
+  Raft__ElectionTimeoutMaxMilliseconds: 1600
+  Raft__HeartbeatIntervalMilliseconds: 300
+  Raft__ReplicationReconnectDelayMilliseconds: 500
+
+x-lsm-node: &lsm-node
+  image: heavy-write-db:raft-cluster
+  environment: *lsm-node-env
+
+services:
+  node-a:
+    <<: *lsm-node
+    build:
+      context: .
+    ports:
+      - "8081:8080"
+    environment:
+      <<: *lsm-node-env
+      Raft__NodeId: node-a
+      Raft__PublicUrl: http://node-a:8080
+      Raft__Peers__0__NodeId: node-b
+      Raft__Peers__0__Url: http://node-b:8080
+      Raft__Peers__1__NodeId: node-c
+      Raft__Peers__1__Url: http://node-c:8080
+
+  node-b:
+    <<: *lsm-node
+    ports:
+      - "8082:8080"
+    environment:
+      <<: *lsm-node-env
+      Raft__NodeId: node-b
+      Raft__PublicUrl: http://node-b:8080
+      Raft__Peers__0__NodeId: node-a
+      Raft__Peers__0__Url: http://node-a:8080
+      Raft__Peers__1__NodeId: node-c
+      Raft__Peers__1__Url: http://node-c:8080
+
+  node-c:
+    <<: *lsm-node
+    ports:
+      - "8083:8080"
+    environment:
+      <<: *lsm-node-env
+      Raft__NodeId: node-c
+      Raft__PublicUrl: http://node-c:8080
+      Raft__Peers__0__NodeId: node-a
+      Raft__Peers__0__Url: http://node-a:8080
+      Raft__Peers__1__NodeId: node-b
+      Raft__Peers__1__Url: http://node-b:8080

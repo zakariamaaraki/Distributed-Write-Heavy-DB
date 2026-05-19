@@ -455,6 +455,22 @@ Run the container:
 docker run --rm -p 8080:8080 heavy-write-db
 ```
 
+Run a local three-node Raft cluster:
+
+```bash
+docker compose up --build
+```
+
+The compose cluster exposes:
+
+- `node-a` on `http://localhost:8081`
+- `node-b` on `http://localhost:8082`
+- `node-c` on `http://localhost:8083`
+
+Each container advertises its internal Docker DNS URL, such as
+`http://node-a:8080`, so Raft vote and heartbeat RPCs stay inside the compose
+network. Use `/raft/state` on each host port to see which node is leader.
+
 ## Non-Goals
 
 - No full relational SQL layer with schemas, joins, secondary indexes, or
