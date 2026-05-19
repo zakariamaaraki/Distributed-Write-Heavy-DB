@@ -66,6 +66,12 @@ Reads inside a transaction see their own staged writes overlaid on top of the
 committed store. A staged delete hides the committed value for that key inside
 the transaction.
 
+Conflict detection is not implemented yet. If two transactions write the same
+key, commits are serialized through the store mutex and the later commit wins
+because it receives the newer sequence number. Reads for keys that were not
+staged in the transaction can also see changes committed by other transactions
+after this transaction started.
+
 Commit closes the transaction and sends its staged operations to the storage
 engine as one batch. The storage engine appends that committed batch to the WAL
 before applying the records to the memtable, so a restart can replay the full
@@ -74,6 +80,23 @@ committed batch. Rollback simply discards the in-memory write set.
 If the server crashes before commit finishes writing a complete committed batch,
 the transaction's staged writes are not restored on startup. This keeps
 uncommitted changes from becoming durable.
+
+#### ACID Properties
+
+- Atomicity: transaction writes are staged in memory and become visible only
+  when commit sends the full staged write set to the store as one batch. Rollback
+  drops the staged write set.
+- Consistency: committed records still go through the same key/value validation,
+  sequence numbering, tombstone handling, WAL, memtable, flush, and compaction
+  rules as direct writes.
+- Isolation: uncommitted writes are private to their transaction, and a
+  transaction reads its own staged writes. This is not snapshot or serializable
+  isolation: reads for keys not staged in the transaction can see newer commits
+  from other transactions, and conflicting writes use last commit wins.
+- Durability: commit appends the committed batch to the WAL before applying it to
+  the memtable. After a restart, complete committed batches are replayed. Partial
+  trailing batch records are ignored, so incomplete commits do not become
+  durable.
 
 ### Ordered MemTable
 
