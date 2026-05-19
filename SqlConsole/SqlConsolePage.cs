@@ -234,6 +234,10 @@ internal static class SqlConsolePage
       overflow-wrap: anywhere;
     }
 
+    a.pill {
+      text-decoration: none;
+    }
+
     .pill.ok {
       color: var(--green);
       border-color: rgba(22, 128, 60, 0.28);
@@ -524,6 +528,7 @@ internal static class SqlConsolePage
         <div class="status-group">
           <span class="pill">endpoint <strong>/sql</strong></span>
           <span class="pill">table <strong>kv</strong></span>
+          <a class="pill" href="/changes-console">changes <strong>stream</strong></a>
         </div>
       </header>
 

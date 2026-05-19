@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using LsmWriteDb.ChangeLogs;
 
 namespace LsmWriteDb.Storage;
 
@@ -35,12 +36,18 @@ public sealed class LsmStore
     private readonly OrderedMemTable _memTable = new();
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly SstableStore _sstables;
+    private readonly ChangeLogService _changeLog;
     private readonly string _walPath;
 
     private bool _initialized;
     private long _lastSequence;
 
     public LsmStore(LsmStoreOptions options)
+        : this(options, new ChangeLogService(options))
+    {
+    }
+
+    public LsmStore(LsmStoreOptions options, ChangeLogService changeLog)
     {
         if (options.FlushThreshold <= 0)
         {
@@ -48,6 +55,7 @@ public sealed class LsmStore
         }
 
         _options = options;
+        _changeLog = changeLog;
         _sstables = new SstableStore(options.DataPath);
         _walPath = Path.Combine(options.DataPath, "wal.log");
     }
@@ -66,11 +74,14 @@ public sealed class LsmStore
 
             _lastSequence = await FindMaxSequenceAsync();
 
-            foreach (var record in await ReadWalAsync())
+            var walRecords = await ReadWalAsync();
+            foreach (var record in walRecords)
             {
                 _memTable.Apply(record);
                 _lastSequence = Math.Max(_lastSequence, record.Sequence);
             }
+
+            await _changeLog.PublishAsync(ToChangeLogEntries(walRecords));
 
             _initialized = true;
         }
@@ -92,6 +103,7 @@ public sealed class LsmStore
             var record = NextRecord(key, value, isDeleted: false);
             await AppendWalAsync(record);
             _memTable.Apply(record);
+            await _changeLog.PublishAsync(ToChangeLogEntries([record]));
 
             await FlushIfNeededAsync();
         }
@@ -113,6 +125,7 @@ public sealed class LsmStore
             var record = NextRecord(key, value: null, isDeleted: true);
             await AppendWalAsync(record);
             _memTable.Apply(record);
+            await _changeLog.PublishAsync(ToChangeLogEntries([record]));
 
             await FlushIfNeededAsync();
         }
@@ -150,6 +163,7 @@ public sealed class LsmStore
                 _memTable.Apply(record);
             }
 
+            await _changeLog.PublishAsync(ToChangeLogEntries(records));
             await FlushIfNeededAsync();
         }
         finally
@@ -257,6 +271,20 @@ public sealed class LsmStore
     {
         var sequence = ++_lastSequence;
         return new StoredRecord(sequence, key, value, isDeleted);
+    }
+
+    private static IReadOnlyList<ChangeLogEntry> ToChangeLogEntries(IReadOnlyList<StoredRecord> records)
+    {
+        var committedAt = DateTimeOffset.UtcNow;
+        return records
+            .Select(record => new ChangeLogEntry(
+                record.Sequence,
+                record.IsDeleted ? "delete" : "put",
+                record.Key,
+                record.Value,
+                record.IsDeleted,
+                committedAt))
+            .ToList();
     }
 
     private async Task FlushIfNeededAsync()

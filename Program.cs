@@ -1,3 +1,4 @@
+using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Sql;
 using LsmWriteDb.SqlConsole;
@@ -10,6 +11,7 @@ var dataPath = Path.Combine(builder.Environment.ContentRootPath, "data");
 var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
 
 builder.Services.AddSingleton(new LsmStoreOptions(dataPath, flushThreshold));
+builder.Services.AddSingleton<ChangeLogService>();
 builder.Services.AddSingleton<LsmStore>();
 builder.Services.AddSingleton<TransactionManager>();
 builder.Services.AddSingleton<SqlEngine>();
@@ -72,6 +74,7 @@ app.MapDelete("/kv/{key}", async (string key, LsmStore db) =>
 app.MapTransactionEndpoints();
 app.MapSqlEndpoints();
 app.MapSqlConsoleEndpoints();
+app.MapChangeLogEndpoints();
 
 app.MapGet("/stats", async (LsmStore db) => Results.Ok(await db.GetStatsAsync()));
 

@@ -12,8 +12,9 @@ This project is a small C# REST API backed by a write-optimized key/value store.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
 - Support SQL point reads, range reads, inserts, updates, deletes, and
   transaction control for the logical `kv` table.
-- Serve a built-in browser SQL console with query history, transaction controls,
-  and tabular results.
+- Publish committed change-log events so replicas and external consumers can
+  replay changes or subscribe over Server-Sent Events from a known sequence
+  number.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
@@ -47,6 +48,10 @@ string columns: `key` and `value`.
 - `DELETE /transactions/{transactionId}`: rollback and discard staged writes.
 - `POST /sql`: execute a SQL statement against the logical `kv` table.
 - `GET /sql-console`: open the embedded browser SQL console.
+- `GET /changes?fromSequence=0&limit=100`: replay committed change-log events.
+- `GET /changes/stream?fromSequence=0`: stream committed changes as
+  Server-Sent Events.
+- `GET /changes-console`: open the embedded change-log stream console.
 - `GET /stats`: inspect simple store statistics.
 
 ## Components
@@ -63,6 +68,43 @@ Committed transactions are written as one committed batch record. On startup, th
 store replays individual records and complete committed batches. A partial
 trailing batch line can be left by a crash and is ignored instead of being
 replayed.
+
+### Change Log Stream
+
+Committed writes are also appended to `data/changelog.log` as change-log events.
+Each event contains the committed sequence number, operation, key, value,
+tombstone flag, and commit timestamp. Direct `PUT`/`DELETE`, SQL writes, and
+transaction commits all publish through the same log because they all eventually
+call the storage engine write path.
+
+Consumers can replay recent changes with:
+
+```text
+GET /changes?fromSequence=120&limit=100
+```
+
+They can also subscribe to the live stream with:
+
+```text
+GET /changes/stream?fromSequence=120
+```
+
+The stream uses Server-Sent Events. The server first replays durable changelog
+entries with `Sequence > fromSequence`, then keeps the HTTP response open and
+sends new committed events as they happen. This lets another service store the
+last sequence it processed and reconnect later without reprocessing older
+changes.
+
+Example event:
+
+```text
+id: 121
+event: change
+data: {"sequence":121,"operation":"put","key":"alpha","value":"one","isDeleted":false,"committedAt":"2026-05-19T12:00:00Z"}
+```
+
+The browser UI at `/changes-console` can replay or subscribe to the same stream
+and display events in a table.
 
 ### Transactions
 
@@ -209,6 +251,15 @@ queries until the transaction is committed, rolled back, or cleared. The sidebar
 also includes clickable suggested queries for point reads, range reads, writes,
 and transaction control.
 
+### Change Log Console
+
+The service also serves `/changes-console`, a browser page for replaying and
+watching committed change-log events. Enter the last processed sequence, connect
+to the stream, and the page shows replayed and live events in a table. It uses
+`/changes/stream` for live updates and `/changes` for one-time replay.
+
+![Change log console screenshot](docs/change-log-console.png)
+
 ### Ordered MemTable
 
 The memtable must support sorted iteration, so it is not a hash dictionary.
@@ -306,6 +357,7 @@ Runtime data lives under `data/`:
 
 - `data/wal.log`: pending direct writes and committed transaction batches not
   yet flushed.
+- `data/changelog.log`: committed change-log events for replayable subscriptions.
 - `data/sstables/*.json`: immutable sorted tables.
 - `data/sstables/*.bloom.json`: Bloom filter sidecars for SSTables.
 

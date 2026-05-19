@@ -14,5 +14,6 @@ public sealed class SqlConsoleTests
         Assert.Contains("id=\"runQuery\"", html);
         Assert.Contains("fetch('/sql'", html);
         Assert.Contains("id=\"transactionId\"", html);
+        Assert.Contains("/changes-console", html);
     }
 }
