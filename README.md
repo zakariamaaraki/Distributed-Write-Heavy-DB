@@ -20,6 +20,10 @@ This project is database backed by a write-optimized key/value store.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
+## High-Level Architecture
+
+![High-level architecture of the distributed LSM database](docs/high-level-architecture.svg)
+
 ## Data Model
 
 The database stores string keys and string values.
