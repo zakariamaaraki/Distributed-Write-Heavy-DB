@@ -1,0 +1,70 @@
+using Microsoft.AspNetCore.Http;
+
+namespace LsmWriteDb.Sql;
+
+public sealed record SqlQueryRequest(string? Query, Guid? TransactionId);
+
+public sealed record SqlExecutionResult(
+    string StatementType,
+    Guid? TransactionId,
+    int RowsAffected,
+    IReadOnlyList<IReadOnlyDictionary<string, string>> Rows,
+    string? Message)
+{
+    public static SqlExecutionResult Acknowledged(
+        string statementType,
+        int rowsAffected,
+        Guid? transactionId = null,
+        string? message = null)
+    {
+        return new SqlExecutionResult(statementType, transactionId, rowsAffected, [], message);
+    }
+
+    public static SqlExecutionResult WithRows(
+        string statementType,
+        IReadOnlyList<IReadOnlyDictionary<string, string>> rows,
+        Guid? transactionId = null)
+    {
+        return new SqlExecutionResult(statementType, transactionId, rows.Count, rows, null);
+    }
+}
+
+internal abstract record SqlStatement(string StatementType);
+
+internal sealed record SqlBeginStatement() : SqlStatement("BEGIN");
+
+internal sealed record SqlCommitStatement() : SqlStatement("COMMIT");
+
+internal sealed record SqlRollbackStatement() : SqlStatement("ROLLBACK");
+
+internal sealed record SqlInsertStatement(string Key, string Value) : SqlStatement("INSERT");
+
+internal sealed record SqlSelectStatement(
+    IReadOnlyList<string> Columns,
+    string? Key,
+    string? Start,
+    string? End,
+    int Limit) : SqlStatement("SELECT");
+
+internal sealed record SqlUpdateStatement(string Key, string Value) : SqlStatement("UPDATE");
+
+internal sealed record SqlDeleteStatement(string Key) : SqlStatement("DELETE");
+
+public sealed class SqlParseException : Exception
+{
+    public SqlParseException(string message)
+        : base(message)
+    {
+    }
+}
+
+public sealed class SqlExecutionException : Exception
+{
+    public SqlExecutionException(string message, int statusCode = StatusCodes.Status400BadRequest)
+        : base(message)
+    {
+        StatusCode = statusCode;
+    }
+
+    public int StatusCode { get; }
+}

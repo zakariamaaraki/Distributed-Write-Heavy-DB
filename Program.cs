@@ -1,4 +1,5 @@
 using LsmWriteDb.Storage;
+using LsmWriteDb.Sql;
 using LsmWriteDb.Transactions;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,6 +11,7 @@ var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
 builder.Services.AddSingleton(new LsmStoreOptions(dataPath, flushThreshold));
 builder.Services.AddSingleton<LsmStore>();
 builder.Services.AddSingleton<TransactionManager>();
+builder.Services.AddSingleton<SqlEngine>();
 
 var app = builder.Build();
 
@@ -67,6 +69,7 @@ app.MapDelete("/kv/{key}", async (string key, LsmStore db) =>
 });
 
 app.MapTransactionEndpoints();
+app.MapSqlEndpoints();
 
 app.MapGet("/stats", async (LsmStore db) => Results.Ok(await db.GetStatsAsync()));
 
