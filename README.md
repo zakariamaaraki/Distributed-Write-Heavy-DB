@@ -1,6 +1,6 @@
 # Simple Distibuted LSM-based Write Heavy Database
 
-This project is a small C# REST API backed by a write-optimized key/value store.
+This project is database backed by a write-optimized key/value store.
 
 ## Goals
 
