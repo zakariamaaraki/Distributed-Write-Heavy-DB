@@ -6,6 +6,7 @@ This project is a small C# REST API backed by a write-optimized key/value store.
 
 - Optimize for frequent writes.
 - Support point reads and range reads.
+- Use Bloom filters to skip SSTables that definitely do not contain a key.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
