@@ -12,6 +12,8 @@ This project is a small C# REST API backed by a write-optimized key/value store.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
 - Support SQL point reads, range reads, inserts, updates, deletes, and
   transaction control for the logical `kv` table.
+- Serve a built-in browser SQL console with query history, transaction controls,
+  and tabular results.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
@@ -44,6 +46,7 @@ string columns: `key` and `value`.
 - `POST /transactions/{transactionId}/commit`: commit staged writes.
 - `DELETE /transactions/{transactionId}`: rollback and discard staged writes.
 - `POST /sql`: execute a SQL statement against the logical `kv` table.
+- `GET /sql-console`: open the embedded browser SQL console.
 - `GET /stats`: inspect simple store statistics.
 
 ## Components
@@ -189,6 +192,22 @@ the transaction before applying the projection and limit.
 This is not a full relational SQL database. There is no schema catalog, joins,
 secondary indexes, or arbitrary predicates yet; SQL is currently another way to
 call the existing key/value operations.
+
+### SQL Console
+
+The service also serves a browser-based SQL console at `/sql-console`. It is
+implemented in `SqlConsole/` and ships with the API, so there is no separate
+frontend build step. The page posts queries to `/sql`, renders returned rows as a
+table, stores recent queries in browser local storage, and keeps the active
+transaction id in the console input.
+
+![SQL console screenshot](docs/sql-console.png)
+
+The console has direct controls for `BEGIN`, `COMMIT`, and `ROLLBACK`. When
+`BEGIN` returns a transaction id, the console stores it and sends it with later
+queries until the transaction is committed, rolled back, or cleared. The sidebar
+also includes clickable suggested queries for point reads, range reads, writes,
+and transaction control.
 
 ### Ordered MemTable
 

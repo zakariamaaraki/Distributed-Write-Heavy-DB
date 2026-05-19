@@ -1,5 +1,6 @@
 using LsmWriteDb.Storage;
 using LsmWriteDb.Sql;
+using LsmWriteDb.SqlConsole;
 using LsmWriteDb.Transactions;
 using Microsoft.AspNetCore.Mvc;
 
@@ -70,6 +71,7 @@ app.MapDelete("/kv/{key}", async (string key, LsmStore db) =>
 
 app.MapTransactionEndpoints();
 app.MapSqlEndpoints();
+app.MapSqlConsoleEndpoints();
 
 app.MapGet("/stats", async (LsmStore db) => Results.Ok(await db.GetStatsAsync()));
 
