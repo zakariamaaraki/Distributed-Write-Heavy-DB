@@ -77,6 +77,10 @@ SSTables exist temporarily before compaction, or if the compaction strategy is
 changed later.
 
 SSTable data is still stored as JSON so the implementation stays easy to inspect.
+That also means this simple version reads the matching SSTable file after the
+Bloom filter says the key might exist. For very large SSTables, a production
+engine would add an SSTable index and block-based file format so point reads can
+seek to the relevant block instead of scanning the whole file.
 
 ### Compaction
 
