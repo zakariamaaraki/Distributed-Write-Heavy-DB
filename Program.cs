@@ -1,4 +1,5 @@
 using LsmWriteDb.ChangeLogs;
+using LsmWriteDb.Raft;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Sql;
 using LsmWriteDb.SqlConsole;
@@ -9,12 +10,20 @@ var builder = WebApplication.CreateBuilder(args);
 
 var dataPath = Path.Combine(builder.Environment.ContentRootPath, "data");
 var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
+var raftOptions = builder.Configuration.GetSection("Raft").Get<RaftOptions>() ?? new RaftOptions();
 
 builder.Services.AddSingleton(new LsmStoreOptions(dataPath, flushThreshold));
 builder.Services.AddSingleton<ChangeLogService>();
 builder.Services.AddSingleton<LsmStore>();
 builder.Services.AddSingleton<TransactionManager>();
 builder.Services.AddSingleton<SqlEngine>();
+builder.Services.AddSingleton(raftOptions);
+builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
+builder.Services.AddSingleton<RaftStateStore>();
+builder.Services.AddSingleton<RaftNode>();
+builder.Services.AddSingleton<RaftRoleGuard>();
+builder.Services.AddHostedService<RaftElectionService>();
+builder.Services.AddHostedService<RaftChangeLogReplicationService>();
 
 var app = builder.Build();
 
@@ -44,8 +53,13 @@ app.MapGet("/kv/{key}", async (string key, LsmStore db) =>
     return row is null ? Results.NotFound() : Results.Ok(row);
 });
 
-app.MapPut("/kv/{key}", async (string key, [FromBody] PutValueRequest request, LsmStore db) =>
+app.MapPut("/kv/{key}", async (string key, [FromBody] PutValueRequest request, LsmStore db, RaftRoleGuard raft) =>
 {
+    if (!raft.CanAcceptWrites)
+    {
+        return raft.WriteRejectedResult();
+    }
+
     if (string.IsNullOrWhiteSpace(key))
     {
         return Results.BadRequest(new { error = "key is required" });
@@ -60,8 +74,13 @@ app.MapPut("/kv/{key}", async (string key, [FromBody] PutValueRequest request, L
     return Results.NoContent();
 });
 
-app.MapDelete("/kv/{key}", async (string key, LsmStore db) =>
+app.MapDelete("/kv/{key}", async (string key, LsmStore db, RaftRoleGuard raft) =>
 {
+    if (!raft.CanAcceptWrites)
+    {
+        return raft.WriteRejectedResult();
+    }
+
     if (string.IsNullOrWhiteSpace(key))
     {
         return Results.BadRequest(new { error = "key is required" });
@@ -75,6 +94,7 @@ app.MapTransactionEndpoints();
 app.MapSqlEndpoints();
 app.MapSqlConsoleEndpoints();
 app.MapChangeLogEndpoints();
+app.MapRaftEndpoints();
 
 app.MapGet("/stats", async (LsmStore db) => Results.Ok(await db.GetStatsAsync()));
 

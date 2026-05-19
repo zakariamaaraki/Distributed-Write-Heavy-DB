@@ -15,6 +15,8 @@ This project is a small C# REST API backed by a write-optimized key/value store.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
+- Elect one write leader with Raft-style terms, votes, and heartbeats while
+  allowing followers to serve reads and replicate from the leader's change log.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
@@ -52,6 +54,10 @@ string columns: `key` and `value`.
 - `GET /changes/stream?fromSequence=0`: stream committed changes as
   Server-Sent Events.
 - `GET /changes-console`: open the embedded change-log stream console.
+- `GET /raft/state`: inspect this node's Raft role, term, leader, and applied
+  change sequence.
+- `POST /raft/request-vote`: internal Raft vote RPC used by peers.
+- `POST /raft/append-entries`: internal Raft heartbeat RPC used by the leader.
 - `GET /stats`: inspect simple store statistics.
 
 ## Components
@@ -105,6 +111,67 @@ data: {"sequence":121,"operation":"put","key":"alpha","value":"one","isDeleted":
 
 The browser UI at `/changes-console` can replay or subscribe to the same stream
 and display events in a table.
+
+### Raft Leader Election
+
+The Raft layer lives under `Raft/` and is responsible for leader election,
+heartbeats, write gating, and follower replication. It is intentionally separate
+from the storage engine.
+
+Leader election:
+
+![Raft leader election](docs/raft-leader-election.gif)
+
+Change-log subscription:
+
+![Raft change-log watch](docs/raft-change-log-watch.gif)
+
+Each node has a role:
+
+- Leader: accepts writes, appends them to the WAL and change log, and sends
+  heartbeats to peers.
+- Follower: rejects write requests with a `409 Conflict`, keeps serving reads,
+  and subscribes to the leader's `/changes/stream` endpoint to apply committed
+  changes locally.
+- Candidate: starts an election when it has not seen a heartbeat within the
+  election timeout.
+
+The election protocol tracks terms and votes in `data/raft-state.json`.
+Followers vote at most once per term. The elected leader sends heartbeat
+messages through `/raft/append-entries`; if a node sees a newer term, it steps
+down to follower.
+
+Follower replication uses the durable change-log stream rather than exposing
+SSTables directly. Each follower stores the last leader change sequence it
+applied in `data/raft-replication.json`, then reconnects with:
+
+```text
+GET {leaderUrl}/changes/stream?fromSequence={lastAppliedChangeSequence}
+```
+
+The follower first receives missed durable events and then continues with live
+events. Applied changes preserve the leader's change sequence locally so the
+replica can resume from the same sequence after restart.
+
+Writes are gated at the API layer. Direct `PUT`/`DELETE`, transactional writes,
+transaction commits, SQL writes, and SQL transaction control require the node to
+be the current leader. Point and range reads remain available on followers.
+
+Example three-node configuration for one node:
+
+```json
+{
+  "Raft": {
+    "Enabled": true,
+    "NodeId": "node-a",
+    "PublicUrl": "http://localhost:8081",
+    "Peers": [
+      { "NodeId": "node-b", "Url": "http://localhost:8082" },
+      { "NodeId": "node-c", "Url": "http://localhost:8083" }
+    ]
+  }
+}
+```
 
 ### Transactions
 
@@ -358,6 +425,9 @@ Runtime data lives under `data/`:
 - `data/wal.log`: pending direct writes and committed transaction batches not
   yet flushed.
 - `data/changelog.log`: committed change-log events for replayable subscriptions.
+- `data/raft-state.json`: persisted Raft term and vote.
+- `data/raft-replication.json`: last leader change sequence applied by a
+  follower.
 - `data/sstables/*.json`: immutable sorted tables.
 - `data/sstables/*.bloom.json`: Bloom filter sidecars for SSTables.
 
@@ -389,7 +459,9 @@ docker run --rm -p 8080:8080 heavy-write-db
 
 - No full relational SQL layer with schemas, joins, secondary indexes, or
   arbitrary predicates.
-- No replication.
+- No dynamic Raft membership changes.
+- No full Raft log replication; followers replicate committed storage changes
+  from the leader's durable change log after leader election.
 - No background compaction.
 - No custom binary SSTable format.
 - No configurable isolation levels beyond read-your-own-writes inside a

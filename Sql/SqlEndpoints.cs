@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using LsmWriteDb.Raft;
 
 namespace LsmWriteDb.Sql;
 
@@ -23,6 +24,18 @@ public static class SqlEndpoints
             catch (SqlExecutionException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (RaftWriteRejectedException ex)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = ex.Message,
+                        role = ex.Role.ToString(),
+                        leaderId = ex.LeaderId,
+                        leaderUrl = ex.LeaderUrl
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
             }
             catch (ArgumentException ex)
             {

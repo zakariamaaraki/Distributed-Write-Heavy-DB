@@ -1,4 +1,5 @@
 using LsmWriteDb.Storage;
+using LsmWriteDb.Raft;
 using LsmWriteDb.Transactions;
 using Microsoft.AspNetCore.Http;
 
@@ -8,11 +9,18 @@ public sealed class SqlEngine
 {
     private readonly LsmStore _store;
     private readonly TransactionManager _transactions;
+    private readonly RaftRoleGuard? _roleGuard;
 
     public SqlEngine(LsmStore store, TransactionManager transactions)
+        : this(store, transactions, roleGuard: null)
+    {
+    }
+
+    public SqlEngine(LsmStore store, TransactionManager transactions, RaftRoleGuard? roleGuard)
     {
         _store = store;
         _transactions = transactions;
+        _roleGuard = roleGuard;
     }
 
     public async Task<SqlExecutionResult> ExecuteAsync(SqlQueryRequest request)
@@ -23,6 +31,11 @@ public sealed class SqlEngine
         }
 
         var statement = SqlParser.Parse(request.Query);
+        if (statement is not SqlSelectStatement)
+        {
+            _roleGuard?.EnsureLeader();
+        }
+
         return statement switch
         {
             SqlBeginStatement => Begin(),

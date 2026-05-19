@@ -172,6 +172,38 @@ public sealed class LsmStore
         }
     }
 
+    public async Task ApplyReplicatedChangeAsync(ChangeLogEntry entry)
+    {
+        ValidateKey(entry.Key);
+        if (!entry.IsDeleted && entry.Value is null)
+        {
+            throw new ArgumentException("Replicated put changes require a value.", nameof(entry));
+        }
+
+        await _mutex.WaitAsync();
+        try
+        {
+            EnsureInitialized();
+
+            if (entry.Sequence <= _lastSequence)
+            {
+                return;
+            }
+
+            var record = new StoredRecord(entry.Sequence, entry.Key, entry.Value, entry.IsDeleted);
+            await AppendWalAsync(record);
+            _memTable.Apply(record);
+            _lastSequence = Math.Max(_lastSequence, record.Sequence);
+
+            await _changeLog.PublishAsync([entry]);
+            await FlushIfNeededAsync();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task<KeyValueRow?> GetAsync(string key)
     {
         ValidateKey(key);

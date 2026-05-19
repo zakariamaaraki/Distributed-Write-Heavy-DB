@@ -1,3 +1,4 @@
+using LsmWriteDb.Raft;
 using Microsoft.AspNetCore.Mvc;
 
 namespace LsmWriteDb.Transactions;
@@ -6,8 +7,13 @@ public static class TransactionEndpoints
 {
     public static WebApplication MapTransactionEndpoints(this WebApplication app)
     {
-        app.MapPost("/transactions", (TransactionManager transactions) =>
+        app.MapPost("/transactions", (TransactionManager transactions, RaftRoleGuard raft) =>
         {
+            if (!raft.CanAcceptWrites)
+            {
+                return raft.WriteRejectedResult();
+            }
+
             var transaction = transactions.Begin();
             return Results.Created($"/transactions/{transaction.TransactionId}", transaction);
         });
@@ -48,8 +54,14 @@ public static class TransactionEndpoints
             Guid transactionId,
             string key,
             [FromBody] TransactionPutValueRequest request,
-            TransactionManager transactions) =>
+            TransactionManager transactions,
+            RaftRoleGuard raft) =>
         {
+            if (!raft.CanAcceptWrites)
+            {
+                return raft.WriteRejectedResult();
+            }
+
             if (string.IsNullOrWhiteSpace(key))
             {
                 return Results.BadRequest(new { error = "key is required" });
@@ -68,8 +80,14 @@ public static class TransactionEndpoints
         app.MapDelete("/transactions/{transactionId:guid}/kv/{key}", (
             Guid transactionId,
             string key,
-            TransactionManager transactions) =>
+            TransactionManager transactions,
+            RaftRoleGuard raft) =>
         {
+            if (!raft.CanAcceptWrites)
+            {
+                return raft.WriteRejectedResult();
+            }
+
             if (string.IsNullOrWhiteSpace(key))
             {
                 return Results.BadRequest(new { error = "key is required" });
@@ -82,8 +100,14 @@ public static class TransactionEndpoints
 
         app.MapPost("/transactions/{transactionId:guid}/commit", async (
             Guid transactionId,
-            TransactionManager transactions) =>
+            TransactionManager transactions,
+            RaftRoleGuard raft) =>
         {
+            if (!raft.CanAcceptWrites)
+            {
+                return raft.WriteRejectedResult();
+            }
+
             var commit = await transactions.CommitAsync(transactionId);
             return commit is null
                 ? Results.NotFound(new { error = "transaction not found" })
@@ -92,8 +116,14 @@ public static class TransactionEndpoints
 
         app.MapDelete("/transactions/{transactionId:guid}", (
             Guid transactionId,
-            TransactionManager transactions) =>
+            TransactionManager transactions,
+            RaftRoleGuard raft) =>
         {
+            if (!raft.CanAcceptWrites)
+            {
+                return raft.WriteRejectedResult();
+            }
+
             return transactions.Rollback(transactionId)
                 ? Results.NoContent()
                 : Results.NotFound(new { error = "transaction not found" });
