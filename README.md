@@ -82,6 +82,10 @@ Bloom filter says the key might exist. For very large SSTables, a production
 engine would add an SSTable index and block-based file format so point reads can
 seek to the relevant block instead of scanning the whole file.
 
+**TODO: replace full-file SSTable reads.** Add an SSTable index and block-based
+storage format so point reads can use the Bloom filter, seek to a small key
+range, and read only the relevant block instead of deserializing a whole SSTable.
+
 ### Compaction
 
 Compaction runs immediately after each flush.
