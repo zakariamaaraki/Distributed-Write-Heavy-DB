@@ -33,6 +33,91 @@ ordering.
 The SQL layer exposes this same model as one logical table named `kv` with two
 string columns: `key` and `value`.
 
+### SQL Engine
+
+The SQL engine lives under `Sql/` and is intentionally layered above the
+key/value database. It does not read or write WAL files, memtables, or SSTables
+directly. Instead, it parses SQL into a small statement model and executes those
+statements through the same `LsmStore` and `TransactionManager` methods used by
+the REST API.
+
+The main pieces are:
+
+- `SqlParser`: tokenizes and parses supported SQL text into statement objects.
+- `SqlEngine`: validates and executes parsed statements against `LsmStore` or
+  `TransactionManager`.
+- `SqlEndpoints`: exposes `POST /sql` and converts parser/execution errors into
+  HTTP responses.
+
+The SQL layer currently maps the database to one logical table:
+
+```sql
+kv(key string, value string)
+```
+
+This means SQL is a user-facing query language for the existing key/value store,
+not a separate storage engine.
+
+Submit SQL with:
+
+```json
+{
+  "query": "SELECT key, value FROM kv WHERE key = 'alpha'",
+  "transactionId": null
+}
+```
+
+Supported statements:
+
+- `BEGIN` or `BEGIN TRANSACTION`
+- `COMMIT` or `COMMIT TRANSACTION`
+- `ROLLBACK` or `ROLLBACK TRANSACTION`
+- `INSERT INTO kv (key, value) VALUES ('alpha', 'one')`
+- `INSERT INTO kv VALUES ('alpha', 'one')`
+- `SELECT * FROM kv WHERE key = 'alpha'`
+- `SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100`
+- `SELECT key FROM kv WHERE key >= 'a' AND key <= 'z'`
+- `UPDATE kv SET value = 'updated' WHERE key = 'alpha'`
+- `DELETE FROM kv WHERE key = 'alpha'`
+
+`BEGIN` returns a transaction id. Include that id in later `/sql` requests to
+stage SQL writes in the transaction or read with staged changes overlaid on
+committed data. `COMMIT` and `ROLLBACK` require the transaction id in the
+request body.
+
+Example transaction flow:
+
+```json
+{ "query": "BEGIN", "transactionId": null }
+```
+
+Then use the returned transaction id:
+
+```json
+{
+  "query": "INSERT INTO kv (key, value) VALUES ('user:1001', '{\"name\":\"Ada\",\"tier\":\"gold\"}')",
+  "transactionId": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+A more complex read can project selected columns, scan a key range, and limit
+the result:
+
+```json
+{
+  "query": "SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50",
+  "transactionId": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+That range query is translated to the same bounded key scan used by
+`GET /kv/range`, then the SQL engine overlays any staged writes or deletes from
+the transaction before applying the projection and limit.
+
+This is not a full relational SQL database. There is no schema catalog, joins,
+secondary indexes, or arbitrary predicates yet; SQL is currently another way to
+call the existing key/value operations.
+
 ## HTTP API
 
 - `PUT /kv/{key}`: create or update a value.
@@ -216,91 +301,6 @@ uncommitted changes from becoming durable.
   the memtable. After a restart, complete committed batches are replayed. Partial
   trailing batch records are ignored, so incomplete commits do not become
   durable.
-
-### SQL Engine
-
-The SQL engine lives under `Sql/` and is intentionally layered above the
-key/value database. It does not read or write WAL files, memtables, or SSTables
-directly. Instead, it parses SQL into a small statement model and executes those
-statements through the same `LsmStore` and `TransactionManager` methods used by
-the REST API.
-
-The main pieces are:
-
-- `SqlParser`: tokenizes and parses supported SQL text into statement objects.
-- `SqlEngine`: validates and executes parsed statements against `LsmStore` or
-  `TransactionManager`.
-- `SqlEndpoints`: exposes `POST /sql` and converts parser/execution errors into
-  HTTP responses.
-
-The SQL layer currently maps the database to one logical table:
-
-```sql
-kv(key string, value string)
-```
-
-This means SQL is a user-facing query language for the existing key/value store,
-not a separate storage engine.
-
-Submit SQL with:
-
-```json
-{
-  "query": "SELECT key, value FROM kv WHERE key = 'alpha'",
-  "transactionId": null
-}
-```
-
-Supported statements:
-
-- `BEGIN` or `BEGIN TRANSACTION`
-- `COMMIT` or `COMMIT TRANSACTION`
-- `ROLLBACK` or `ROLLBACK TRANSACTION`
-- `INSERT INTO kv (key, value) VALUES ('alpha', 'one')`
-- `INSERT INTO kv VALUES ('alpha', 'one')`
-- `SELECT * FROM kv WHERE key = 'alpha'`
-- `SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100`
-- `SELECT key FROM kv WHERE key >= 'a' AND key <= 'z'`
-- `UPDATE kv SET value = 'updated' WHERE key = 'alpha'`
-- `DELETE FROM kv WHERE key = 'alpha'`
-
-`BEGIN` returns a transaction id. Include that id in later `/sql` requests to
-stage SQL writes in the transaction or read with staged changes overlaid on
-committed data. `COMMIT` and `ROLLBACK` require the transaction id in the
-request body.
-
-Example transaction flow:
-
-```json
-{ "query": "BEGIN", "transactionId": null }
-```
-
-Then use the returned transaction id:
-
-```json
-{
-  "query": "INSERT INTO kv (key, value) VALUES ('user:1001', '{\"name\":\"Ada\",\"tier\":\"gold\"}')",
-  "transactionId": "00000000-0000-0000-0000-000000000000"
-}
-```
-
-A more complex read can project selected columns, scan a key range, and limit
-the result:
-
-```json
-{
-  "query": "SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50",
-  "transactionId": "00000000-0000-0000-0000-000000000000"
-}
-```
-
-That range query is translated to the same bounded key scan used by
-`GET /kv/range`, then the SQL engine overlays any staged writes or deletes from
-the transaction before applying the projection and limit.
-
-This is not a full relational SQL database. There is no schema catalog, joins,
-secondary indexes, or arbitrary predicates yet; SQL is currently another way to
-call the existing key/value operations.
 
 ### SQL Console
 
