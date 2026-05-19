@@ -65,6 +65,17 @@ Each SSTable has a companion Bloom filter sidecar file. Point reads check the
 Bloom filter before opening the data file, which avoids unnecessary file reads
 for keys that are definitely absent.
 
+Without compaction, every flush would leave another SSTable behind. A point read
+that misses the memtable would then check SSTables from newest to oldest, because
+newer SSTables contain newer writes for the same key. The first matching
+non-deleted record is the value to return.
+
+In this project, compaction runs immediately after every flush. That means the
+normal state after compaction is one compacted SSTable plus the active memtable,
+not many SSTables. The newest-to-oldest read path still works if multiple
+SSTables exist temporarily before compaction, or if the compaction strategy is
+changed later.
+
 SSTable data is still stored as JSON so the implementation stays easy to inspect.
 
 ### Compaction
@@ -93,7 +104,9 @@ LSM implementation.
 1. Check the memtable first.
 2. If the key is tombstoned, return not found.
 3. If not found in memory, scan SSTables from newest to oldest.
-4. Return the newest non-tombstoned value, or not found.
+4. Use each SSTable's Bloom filter to skip files that definitely do not contain
+   the key.
+5. Return the newest non-tombstoned value, or not found.
 
 ## Range Read Path
 
