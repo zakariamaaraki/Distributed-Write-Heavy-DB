@@ -7,6 +7,19 @@ public sealed record LsmStoreOptions(string DataPath, int FlushThreshold);
 
 public sealed record KeyValueRow(string Key, string Value);
 
+public sealed record StoreWriteOperation(string Key, string? Value, bool IsDeleted)
+{
+    public static StoreWriteOperation Put(string key, string value)
+    {
+        return new StoreWriteOperation(key, value, IsDeleted: false);
+    }
+
+    public static StoreWriteOperation Delete(string key)
+    {
+        return new StoreWriteOperation(key, null, IsDeleted: true);
+    }
+}
+
 public sealed record StoreStats(
     int MemTableEntries,
     int SstableCount,
@@ -15,6 +28,7 @@ public sealed record StoreStats(
 
 public sealed class LsmStore
 {
+    private const string CommittedBatchWalEntryType = "committedBatch";
     private static readonly JsonSerializerOptions WalJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly LsmStoreOptions _options;
@@ -99,6 +113,42 @@ public sealed class LsmStore
             var record = NextRecord(key, value: null, isDeleted: true);
             await AppendWalAsync(record);
             _memTable.Apply(record);
+
+            await FlushIfNeededAsync();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public async Task ApplyBatchAsync(IReadOnlyList<StoreWriteOperation> operations)
+    {
+        if (operations.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var operation in operations)
+        {
+            ValidateWriteOperation(operation);
+        }
+
+        await _mutex.WaitAsync();
+        try
+        {
+            EnsureInitialized();
+
+            var records = operations
+                .Select(operation => NextRecord(operation.Key, operation.Value, operation.IsDeleted))
+                .ToList();
+
+            await AppendCommittedBatchWalAsync(records);
+
+            foreach (var record in records)
+            {
+                _memTable.Apply(record);
+            }
 
             await FlushIfNeededAsync();
         }
@@ -279,7 +329,17 @@ public sealed class LsmStore
 
     private async Task AppendWalAsync(StoredRecord record)
     {
-        var line = JsonSerializer.Serialize(record, WalJsonOptions);
+        await AppendWalLineAsync(record);
+    }
+
+    private async Task AppendCommittedBatchWalAsync(IReadOnlyList<StoredRecord> records)
+    {
+        await AppendWalLineAsync(new WalCommittedBatch(CommittedBatchWalEntryType, records));
+    }
+
+    private async Task AppendWalLineAsync<T>(T value)
+    {
+        var line = JsonSerializer.Serialize(value, WalJsonOptions);
 
         await using var stream = new FileStream(
             _walPath,
@@ -325,43 +385,58 @@ public sealed class LsmStore
             json = json[preamble.Length..];
         }
 
-        if (IsOnlyWhiteSpace(json))
+        var text = Encoding.UTF8.GetString(json);
+        if (string.IsNullOrWhiteSpace(text))
         {
             return records;
         }
 
-        var reader = new Utf8JsonReader(json, new JsonReaderOptions { AllowMultipleValues = true });
-
-        while (reader.Read())
+        using var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
         {
-            if (reader.TokenType != JsonTokenType.StartObject)
+            if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
-            var record = JsonSerializer.Deserialize<StoredRecord>(ref reader, WalJsonOptions);
-            if (record is null)
-            {
-                continue;
-            }
-
-            records.Add(record);
+            TryAppendWalLine(line, records);
         }
 
         return records;
     }
 
-    private static bool IsOnlyWhiteSpace(ReadOnlySpan<byte> bytes)
+    private static void TryAppendWalLine(string line, List<StoredRecord> records)
     {
-        foreach (var value in bytes)
+        try
         {
-            if (value is not ((byte)' ' or (byte)'\r' or (byte)'\n' or (byte)'\t'))
-            {
-                return false;
-            }
-        }
+            using var document = JsonDocument.Parse(line);
 
-        return true;
+            if (document.RootElement.TryGetProperty("type", out var typeElement)
+                && string.Equals(typeElement.GetString(), CommittedBatchWalEntryType, StringComparison.Ordinal))
+            {
+                var batch = JsonSerializer.Deserialize<WalCommittedBatch>(line, WalJsonOptions);
+                if (batch?.Records is not null)
+                {
+                    records.AddRange(batch.Records);
+                }
+
+                return;
+            }
+
+            var record = JsonSerializer.Deserialize<StoredRecord>(line, WalJsonOptions);
+            if (record is null)
+            {
+                return;
+            }
+
+            records.Add(record);
+        }
+        catch (JsonException)
+        {
+            // A server crash can leave a partial trailing WAL line. Ignore it
+            // so an incomplete transaction batch is not replayed as committed.
+        }
     }
 
     private static void KeepNewest(SortedDictionary<string, StoredRecord> records, StoredRecord candidate)
@@ -397,6 +472,16 @@ public sealed class LsmStore
         if (string.IsNullOrWhiteSpace(key))
         {
             throw new ArgumentException("Key is required.", nameof(key));
+        }
+    }
+
+    private static void ValidateWriteOperation(StoreWriteOperation operation)
+    {
+        ValidateKey(operation.Key);
+
+        if (!operation.IsDeleted && operation.Value is null)
+        {
+            throw new ArgumentException("Value is required.", nameof(operation));
         }
     }
 
@@ -470,3 +555,5 @@ internal sealed class OrderedMemTable
 }
 
 internal sealed record StoredRecord(long Sequence, string Key, string? Value, bool IsDeleted);
+
+internal sealed record WalCommittedBatch(string Type, IReadOnlyList<StoredRecord> Records);

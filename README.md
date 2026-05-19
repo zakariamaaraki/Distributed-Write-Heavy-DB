@@ -7,6 +7,8 @@ This project is a small C# REST API backed by a write-optimized key/value store.
 - Optimize for frequent writes.
 - Support point reads and range reads.
 - Use Bloom filters to skip SSTables that definitely do not contain a key.
+- Support explicit transactions with begin, staged writes, commit, and rollback.
+- Keep uncommitted transaction changes out of durable storage after a server crash.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
@@ -26,6 +28,15 @@ ordering.
 - `GET /kv/{key}`: fetch a single value.
 - `DELETE /kv/{key}`: delete a key.
 - `GET /kv/range?start=a&end=z&limit=100`: return keys in sorted order.
+- `POST /transactions`: start a transaction.
+- `PUT /transactions/{transactionId}/kv/{key}`: stage a transactional upsert.
+- `DELETE /transactions/{transactionId}/kv/{key}`: stage a transactional delete.
+- `GET /transactions/{transactionId}/kv/{key}`: read with the transaction's
+  staged changes overlaid on committed data.
+- `GET /transactions/{transactionId}/kv/range?start=a&end=z&limit=100`: range
+  read with staged transaction changes overlaid on committed data.
+- `POST /transactions/{transactionId}/commit`: commit staged writes.
+- `DELETE /transactions/{transactionId}`: rollback and discard staged writes.
 - `GET /stats`: inspect simple store statistics.
 
 ## Components
@@ -36,6 +47,33 @@ Every write is appended to a write-ahead log before it is applied to memory.
 On startup, the log is replayed so acknowledged writes are not lost.
 
 The log is reset after the current memtable is flushed to disk.
+
+Direct `PUT` and `DELETE` requests are written to the log as individual records.
+Committed transactions are written as one committed batch record. On startup, the
+store replays individual records and complete committed batches. A partial
+trailing batch line can be left by a crash and is ignored instead of being
+replayed.
+
+### Transactions
+
+Transactions live in the `Transactions/` code path and stage writes in memory.
+Starting a transaction returns a transaction id. `PUT` and `DELETE` requests made
+through that id update only the transaction's private write set; they are not
+written to the WAL, are not applied to the memtable, and are not visible to
+normal `/kv` reads.
+
+Reads inside a transaction see their own staged writes overlaid on top of the
+committed store. A staged delete hides the committed value for that key inside
+the transaction.
+
+Commit closes the transaction and sends its staged operations to the storage
+engine as one batch. The storage engine appends that committed batch to the WAL
+before applying the records to the memtable, so a restart can replay the full
+committed batch. Rollback simply discards the in-memory write set.
+
+If the server crashes before commit finishes writing a complete committed batch,
+the transaction's staged writes are not restored on startup. This keeps
+uncommitted changes from becoming durable.
 
 ### Ordered MemTable
 
@@ -132,7 +170,8 @@ active memtable.
 
 Runtime data lives under `data/`:
 
-- `data/wal.log`: pending writes not yet flushed.
+- `data/wal.log`: pending direct writes and committed transaction batches not
+  yet flushed.
 - `data/sstables/*.json`: immutable sorted tables.
 - `data/sstables/*.bloom.json`: Bloom filter sidecars for SSTables.
 
@@ -163,9 +202,10 @@ docker run --rm -p 8080:8080 heavy-write-db
 ## Non-Goals
 
 - No SQL layer.
-- No multi-key transactions.
 - No replication.
 - No background compaction.
 - No custom binary SSTable format.
+- No configurable isolation levels beyond read-your-own-writes inside a
+  transaction and serialized commit through the store mutex.
 
 Those can be added later, but they would make the first version harder to read.
