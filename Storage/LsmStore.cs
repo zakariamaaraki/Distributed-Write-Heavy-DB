@@ -7,7 +7,11 @@ namespace LsmWriteDb.Storage;
 public sealed record LsmStoreOptions(
     string DataPath,
     int FlushThreshold,
-    string TableName = TableNames.Default);
+    string TableName = TableNames.Default,
+    int BlockSizeBytes = LsmStoreOptions.DefaultBlockSizeBytes)
+{
+    public const int DefaultBlockSizeBytes = SstableStore.DefaultBlockSizeBytes;
+}
 
 public sealed record KeyValueRow(string Key, string Value);
 
@@ -46,7 +50,8 @@ public sealed record StoreStats(
     int MemTableEntries,
     int SstableCount,
     long LastSequence,
-    int FlushThreshold);
+    int FlushThreshold,
+    int BlockSizeBytes);
 
 public sealed class LsmStore
 {
@@ -79,10 +84,15 @@ public sealed class LsmStore
             throw new ArgumentOutOfRangeException(nameof(options), "Flush threshold must be greater than zero.");
         }
 
+        if (options.BlockSizeBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Block size must be greater than zero.");
+        }
+
         _options = options with { TableName = TableNames.Normalize(options.TableName) };
         _changeLog = changeLog;
         _sequenceGenerator = sequenceGenerator;
-        _sstables = new SstableStore(options.DataPath);
+        _sstables = new SstableStore(options.DataPath, options.BlockSizeBytes);
         _walPath = Path.Combine(options.DataPath, "wal.log");
     }
 
@@ -321,7 +331,8 @@ public sealed class LsmStore
                 _memTable.Count,
                 await _sstables.CountAsync(),
                 _lastSequence,
-                _options.FlushThreshold);
+                _options.FlushThreshold,
+                _options.BlockSizeBytes);
         }
         finally
         {

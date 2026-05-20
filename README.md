@@ -9,6 +9,8 @@ This project is database backed by a write-optimized key/value store.
 - Support multiple logical tables, each with its own WAL, memtable, SSTables,
   Bloom filters, and compaction lifecycle.
 - Use Bloom filters to skip SSTables that definitely do not contain a key.
+- Use configurable SSTable blocks with sparse indexes so point reads can seek
+  to a small block instead of reading a whole SSTable.
 - Support explicit transactions with begin, staged writes, commit, and rollback.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
@@ -402,15 +404,52 @@ not many SSTables. The newest-to-oldest read path still works if multiple
 SSTables exist temporarily before compaction, or if the compaction strategy is
 changed later.
 
-SSTable data is still stored as JSON so the implementation stays easy to inspect.
-That also means this simple version reads the matching SSTable file after the
-Bloom filter says the key might exist. For very large SSTables, a production
-engine would add an SSTable index and block-based file format so point reads can
-seek to the relevant block instead of scanning the whole file.
+SSTable data is still stored as JSON so the implementation stays easy to
+inspect, but new SSTables are written as multiple sorted JSON blocks instead of
+one large JSON array. Each SSTable has two sidecar files:
 
-**TODO: replace full-file SSTable reads.** Add an SSTable index and block-based
-storage format so point reads can use the Bloom filter, seek to a small key
-range, and read only the relevant block instead of deserializing a whole SSTable.
+- `.bloom.json`: Bloom filter for fast definite-miss checks.
+- `.index.json`: sparse index with one entry per data block.
+
+The block size is configurable with `Lsm:BlockSizeBytes` or the
+`Lsm__BlockSizeBytes` environment variable. The default is `16384` bytes. A
+smaller block size means point reads deserialize fewer bytes, but it creates more
+index entries and more blocks. A larger block size keeps the index smaller and
+reduces block count, but each point read may deserialize more data. The block
+size is a target: if a single record makes a block cross the configured size, the
+record stays in that block.
+
+### Sparse Index
+
+The sparse index does not store every key. It stores one row per SSTable block:
+
+```jsonc
+{
+  "firstKey": "customer:1000", // first sorted key in this block
+  "lastKey": "customer:1499",  // last sorted key in this block
+  "offset": 348,               // byte position where this block starts in the SSTable file
+  "length": 553,               // number of bytes to read for this block
+  "recordCount": 500           // records stored inside this block
+}
+```
+
+For a point read that misses the memtable, the store checks SSTables from newest
+to oldest:
+
+1. Read the Bloom filter. If it says the key is definitely absent, skip the
+   SSTable.
+2. Read the sparse index and find the block where
+   `firstKey <= requested key <= lastKey`.
+3. Open the SSTable data file, seek to `offset`, read `length` bytes, and
+   deserialize only that block.
+4. Search the block for the exact key and return the newest non-deleted record.
+
+Old SSTables without an `.index.json` sidecar are still supported through a
+legacy fallback that reads the old full-file JSON array.
+
+**TODO: optimize range reads with sparse-index bounds.** Point reads now seek to
+one candidate block. Range reads still load SSTable blocks and filter records,
+so they can be improved later by seeking only the blocks that overlap the range.
 
 ### Compaction
 
@@ -443,7 +482,9 @@ LSM implementation.
 4. If not found in memory, scan that table's SSTables from newest to oldest.
 5. Use each SSTable's Bloom filter to skip files that definitely do not contain
    the key.
-6. Return the newest non-tombstoned value, or not found.
+6. Use the sparse index to find the candidate block, seek to that block, and
+   deserialize only that block.
+7. Return the newest non-tombstoned value, or not found.
 
 ## Range Read Path
 
@@ -472,6 +513,19 @@ Runtime data lives under `data/`:
 - `data/tables/{table}/sstables/*.json`: immutable sorted tables for one table.
 - `data/tables/{table}/sstables/*.bloom.json`: Bloom filter sidecars for that
   table's SSTables.
+- `data/tables/{table}/sstables/*.index.json`: sparse index sidecars with block
+  key ranges and byte offsets for that table's SSTables.
+
+SSTable block size can be configured in `appsettings.json`:
+
+```json
+{
+  "Lsm": {
+    "FlushThreshold": 100,
+    "BlockSizeBytes": 16384
+  }
+}
+```
 
 ## Testing
 

@@ -1,6 +1,7 @@
 x-lsm-node-env: &lsm-node-env
   ASPNETCORE_URLS: http://+:8080
   Lsm__FlushThreshold: 100
+  Lsm__BlockSizeBytes: 16384
   Raft__Enabled: "true"
   Raft__ElectionTimeoutMinMilliseconds: 800
   Raft__ElectionTimeoutMaxMilliseconds: 1600

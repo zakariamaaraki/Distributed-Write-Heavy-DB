@@ -9,9 +9,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 var dataPath = Path.Combine(builder.Environment.ContentRootPath, "data");
 var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
+var blockSizeBytes = builder.Configuration.GetValue("Lsm:BlockSizeBytes", LsmStoreOptions.DefaultBlockSizeBytes);
 var raftOptions = builder.Configuration.GetSection("Raft").Get<RaftOptions>() ?? new RaftOptions();
 
-builder.Services.AddSingleton(new LsmStoreOptions(dataPath, flushThreshold));
+builder.Services.AddSingleton(new LsmStoreOptions(
+    dataPath,
+    flushThreshold,
+    BlockSizeBytes: blockSizeBytes));
 builder.Services.AddSingleton<ChangeLogService>();
 builder.Services.AddSingleton<DatabaseEngine>();
 builder.Services.AddSingleton<TransactionManager>();

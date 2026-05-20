@@ -48,7 +48,8 @@ public sealed record TableStats(
     int MemTableEntries,
     int SstableCount,
     long LastSequence,
-    int FlushThreshold);
+    int FlushThreshold,
+    int BlockSizeBytes);
 
 public sealed record DatabaseStats(
     IReadOnlyList<TableStats> Tables,
@@ -62,6 +63,8 @@ public sealed record DatabaseStats(
     public int SstableCount => DefaultTable?.SstableCount ?? 0;
 
     public int FlushThreshold => DefaultTable?.FlushThreshold ?? 0;
+
+    public int BlockSizeBytes => DefaultTable?.BlockSizeBytes ?? 0;
 }
 
 public sealed class TableNotFoundException : Exception
@@ -247,7 +250,8 @@ public sealed class DatabaseEngine
             stats.MemTableEntries,
             stats.SstableCount,
             stats.LastSequence,
-            stats.FlushThreshold);
+            stats.FlushThreshold,
+            stats.BlockSizeBytes);
     }
 
     private async Task<LsmStore> GetStoreAsync(string table)
@@ -270,7 +274,11 @@ public sealed class DatabaseEngine
         {
             var tablePath = Path.Combine(_tablesPath, name);
             return new LsmStore(
-                new LsmStoreOptions(tablePath, _options.FlushThreshold, name),
+                new LsmStoreOptions(
+                    tablePath,
+                    _options.FlushThreshold,
+                    name,
+                    _options.BlockSizeBytes),
                 _changeLog,
                 _sequenceGenerator);
         });
