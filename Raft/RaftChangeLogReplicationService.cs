@@ -10,18 +10,18 @@ public sealed class RaftChangeLogReplicationService : BackgroundService
 
     private readonly RaftOptions _options;
     private readonly RaftNode _node;
-    private readonly LsmStore _store;
+    private readonly DatabaseEngine _database;
     private readonly HttpClient _httpClient;
 
     public RaftChangeLogReplicationService(
         RaftOptions options,
         RaftNode node,
-        LsmStore store,
+        DatabaseEngine database,
         HttpClient httpClient)
     {
         _options = options;
         _node = node;
-        _store = store;
+        _database = database;
         _httpClient = httpClient;
     }
 
@@ -96,7 +96,7 @@ public sealed class RaftChangeLogReplicationService : BackgroundService
                     continue;
                 }
 
-                await _store.ApplyReplicatedChangeAsync(entry);
+                await _database.ApplyReplicatedChangeAsync(entry);
                 await _node.RecordAppliedChangeAsync(entry.Sequence, cancellationToken);
             }
         }

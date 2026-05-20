@@ -4,7 +4,10 @@ using LsmWriteDb.ChangeLogs;
 
 namespace LsmWriteDb.Storage;
 
-public sealed record LsmStoreOptions(string DataPath, int FlushThreshold);
+public sealed record LsmStoreOptions(
+    string DataPath,
+    int FlushThreshold,
+    string TableName = TableNames.Default);
 
 public sealed record KeyValueRow(string Key, string Value);
 
@@ -15,10 +18,28 @@ public sealed record StoreWriteOperation(string Key, string? Value, bool IsDelet
         return new StoreWriteOperation(key, value, IsDeleted: false);
     }
 
+    public static StoreWriteOperation Put(string table, string key, string value)
+    {
+        return new StoreWriteOperation(key, value, IsDeleted: false)
+        {
+            Table = TableNames.Normalize(table)
+        };
+    }
+
     public static StoreWriteOperation Delete(string key)
     {
         return new StoreWriteOperation(key, null, IsDeleted: true);
     }
+
+    public static StoreWriteOperation Delete(string table, string key)
+    {
+        return new StoreWriteOperation(key, null, IsDeleted: true)
+        {
+            Table = TableNames.Normalize(table)
+        };
+    }
+
+    public string Table { get; init; } = TableNames.Default;
 }
 
 public sealed record StoreStats(
@@ -37,6 +58,7 @@ public sealed class LsmStore
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly SstableStore _sstables;
     private readonly ChangeLogService _changeLog;
+    private readonly IStoreSequenceGenerator? _sequenceGenerator;
     private readonly string _walPath;
 
     private bool _initialized;
@@ -47,15 +69,19 @@ public sealed class LsmStore
     {
     }
 
-    public LsmStore(LsmStoreOptions options, ChangeLogService changeLog)
+    public LsmStore(
+        LsmStoreOptions options,
+        ChangeLogService changeLog,
+        IStoreSequenceGenerator? sequenceGenerator = null)
     {
         if (options.FlushThreshold <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Flush threshold must be greater than zero.");
         }
 
-        _options = options;
+        _options = options with { TableName = TableNames.Normalize(options.TableName) };
         _changeLog = changeLog;
+        _sequenceGenerator = sequenceGenerator;
         _sstables = new SstableStore(options.DataPath);
         _walPath = Path.Combine(options.DataPath, "wal.log");
     }
@@ -73,6 +99,7 @@ public sealed class LsmStore
             Directory.CreateDirectory(_options.DataPath);
 
             _lastSequence = await FindMaxSequenceAsync();
+            _sequenceGenerator?.Observe(_lastSequence);
 
             var walRecords = await ReadWalAsync();
             foreach (var record in walRecords)
@@ -145,6 +172,7 @@ public sealed class LsmStore
         foreach (var operation in operations)
         {
             ValidateWriteOperation(operation);
+            ValidateTable(operation.Table);
         }
 
         await _mutex.WaitAsync();
@@ -174,6 +202,7 @@ public sealed class LsmStore
 
     public async Task ApplyReplicatedChangeAsync(ChangeLogEntry entry)
     {
+        ValidateTable(entry.Table);
         ValidateKey(entry.Key);
         if (!entry.IsDeleted && entry.Value is null)
         {
@@ -194,6 +223,7 @@ public sealed class LsmStore
             await AppendWalAsync(record);
             _memTable.Apply(record);
             _lastSequence = Math.Max(_lastSequence, record.Sequence);
+            _sequenceGenerator?.Observe(record.Sequence);
 
             await _changeLog.PublishAsync([entry]);
             await FlushIfNeededAsync();
@@ -301,11 +331,12 @@ public sealed class LsmStore
 
     private StoredRecord NextRecord(string key, string? value, bool isDeleted)
     {
-        var sequence = ++_lastSequence;
+        var sequence = _sequenceGenerator?.NextSequence() ?? ++_lastSequence;
+        _lastSequence = Math.Max(_lastSequence, sequence);
         return new StoredRecord(sequence, key, value, isDeleted);
     }
 
-    private static IReadOnlyList<ChangeLogEntry> ToChangeLogEntries(IReadOnlyList<StoredRecord> records)
+    private IReadOnlyList<ChangeLogEntry> ToChangeLogEntries(IReadOnlyList<StoredRecord> records)
     {
         var committedAt = DateTimeOffset.UtcNow;
         return records
@@ -315,7 +346,10 @@ public sealed class LsmStore
                 record.Key,
                 record.Value,
                 record.IsDeleted,
-                committedAt))
+                committedAt)
+            {
+                Table = _options.TableName
+            })
             .ToList();
     }
 
@@ -537,6 +571,7 @@ public sealed class LsmStore
 
     private static void ValidateWriteOperation(StoreWriteOperation operation)
     {
+        TableNames.Normalize(operation.Table);
         ValidateKey(operation.Key);
 
         if (!operation.IsDeleted && operation.Value is null)
@@ -550,6 +585,15 @@ public sealed class LsmStore
         if (!_initialized)
         {
             throw new InvalidOperationException("Store has not been initialized.");
+        }
+    }
+
+    private void ValidateTable(string table)
+    {
+        var normalized = TableNames.Normalize(table);
+        if (!string.Equals(normalized, _options.TableName, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"Change belongs to table '{normalized}', but this store handles table '{_options.TableName}'.", nameof(table));
         }
     }
 }

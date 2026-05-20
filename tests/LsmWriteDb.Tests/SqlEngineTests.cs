@@ -1,3 +1,4 @@
+using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Sql;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Transactions;
@@ -177,12 +178,88 @@ public sealed class SqlEngineTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CreatesAndQueriesMultipleTables()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+
+            var createUsers = await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE orders", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('same', 'user-value')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('same', 'order-value')", null));
+
+            var users = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT value FROM users WHERE key = 'same'",
+                TransactionId: null));
+            var orders = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT value FROM orders WHERE key = 'same'",
+                TransactionId: null));
+            var defaultTable = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT * FROM kv WHERE key = 'same'",
+                TransactionId: null));
+
+            Assert.Equal("CREATE TABLE", createUsers.StatementType);
+            Assert.Equal(1, createUsers.RowsAffected);
+            Assert.Equal("user-value", users.Rows.Single()["value"]);
+            Assert.Equal("order-value", orders.Rows.Single()["value"]);
+            Assert.Empty(defaultTable.Rows);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_TransactionCanStageWritesAcrossTables()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE orders", null));
+
+            var begin = await engine.ExecuteAsync(new SqlQueryRequest("BEGIN", null));
+            var transactionId = begin.TransactionId!.Value;
+
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('user:1', 'Ada')", transactionId));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('order:1', 'Book')", transactionId));
+
+            var usersInside = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT value FROM users WHERE key = 'user:1'",
+                transactionId));
+            var usersOutside = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT value FROM users WHERE key = 'user:1'",
+                TransactionId: null));
+            var commit = await engine.ExecuteAsync(new SqlQueryRequest("COMMIT", transactionId));
+            var ordersAfterCommit = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT value FROM orders WHERE key = 'order:1'",
+                TransactionId: null));
+
+            Assert.Equal("Ada", usersInside.Rows.Single()["value"]);
+            Assert.Empty(usersOutside.Rows);
+            Assert.Equal(2, commit.RowsAffected);
+            Assert.Equal("Book", ordersAfterCommit.Rows.Single()["value"]);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
-        var store = new LsmStore(new LsmStoreOptions(dataPath, flushThreshold));
-        await store.InitializeAsync();
-        var transactions = new TransactionManager(store);
-        return new SqlEngine(store, transactions);
+        var options = new LsmStoreOptions(dataPath, flushThreshold);
+        var database = new DatabaseEngine(options, new ChangeLogService(options));
+        await database.InitializeAsync();
+        var transactions = new TransactionManager(database);
+        return new SqlEngine(database, transactions);
     }
 
     private static string CreateTempDataPath()

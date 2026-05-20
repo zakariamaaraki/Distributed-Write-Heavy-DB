@@ -39,6 +39,11 @@ internal sealed class SqlParser
             return new SqlRollbackStatement();
         }
 
+        if (MatchKeyword("CREATE"))
+        {
+            return ParseCreate();
+        }
+
         if (MatchKeyword("INSERT"))
         {
             return ParseInsert();
@@ -59,13 +64,25 @@ internal sealed class SqlParser
             return ParseDelete();
         }
 
-        throw Error("Expected BEGIN, COMMIT, ROLLBACK, INSERT, SELECT, UPDATE, or DELETE.");
+        throw Error("Expected BEGIN, COMMIT, ROLLBACK, CREATE, INSERT, SELECT, UPDATE, or DELETE.");
+    }
+
+    private SqlCreateTableStatement ParseCreate()
+    {
+        ExpectKeyword("TABLE");
+        if (MatchKeyword("IF"))
+        {
+            ExpectKeyword("NOT");
+            ExpectKeyword("EXISTS");
+        }
+
+        return new SqlCreateTableStatement(ExpectTableName());
     }
 
     private SqlInsertStatement ParseInsert()
     {
         ExpectKeyword("INTO");
-        ExpectTableName();
+        var table = ExpectTableName();
 
         var columns = new List<string>();
         if (MatchSymbol("("))
@@ -112,14 +129,14 @@ internal sealed class SqlParser
             throw Error("INSERT requires key and value columns.");
         }
 
-        return new SqlInsertStatement(key, value);
+        return new SqlInsertStatement(table, key, value);
     }
 
     private SqlSelectStatement ParseSelect()
     {
         var columns = ParseSelectColumns();
         ExpectKeyword("FROM");
-        ExpectTableName();
+        var table = ExpectTableName();
 
         string? key = null;
         string? start = null;
@@ -136,7 +153,7 @@ internal sealed class SqlParser
             limit = ExpectPositiveNumber();
         }
 
-        return new SqlSelectStatement(columns, key, start, end, limit);
+        return new SqlSelectStatement(table, columns, key, start, end, limit);
     }
 
     private IReadOnlyList<string> ParseSelectColumns()
@@ -221,7 +238,7 @@ internal sealed class SqlParser
 
     private SqlUpdateStatement ParseUpdate()
     {
-        ExpectTableName();
+        var table = ExpectTableName();
         ExpectKeyword("SET");
         ExpectIdentifier("value");
         ExpectSymbol("=");
@@ -231,28 +248,24 @@ internal sealed class SqlParser
         ExpectSymbol("=");
         var key = ExpectStringLiteral();
 
-        return new SqlUpdateStatement(key, value);
+        return new SqlUpdateStatement(table, key, value);
     }
 
     private SqlDeleteStatement ParseDelete()
     {
         ExpectKeyword("FROM");
-        ExpectTableName();
+        var table = ExpectTableName();
         ExpectKeyword("WHERE");
         ExpectIdentifier("key");
         ExpectSymbol("=");
         var key = ExpectStringLiteral();
 
-        return new SqlDeleteStatement(key);
+        return new SqlDeleteStatement(table, key);
     }
 
-    private void ExpectTableName()
+    private string ExpectTableName()
     {
-        var table = ExpectIdentifier();
-        if (!string.Equals(table, "kv", StringComparison.OrdinalIgnoreCase))
-        {
-            throw Error("Only the kv table is supported.");
-        }
+        return ExpectIdentifier().ToLowerInvariant();
     }
 
     private string ExpectColumnName()

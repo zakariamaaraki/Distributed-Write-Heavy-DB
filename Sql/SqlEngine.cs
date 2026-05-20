@@ -7,7 +7,8 @@ namespace LsmWriteDb.Sql;
 
 public sealed class SqlEngine
 {
-    private readonly LsmStore _store;
+    private readonly DatabaseEngine? _database;
+    private readonly LsmStore? _singleStore;
     private readonly TransactionManager _transactions;
     private readonly RaftRoleGuard? _roleGuard;
 
@@ -18,7 +19,19 @@ public sealed class SqlEngine
 
     public SqlEngine(LsmStore store, TransactionManager transactions, RaftRoleGuard? roleGuard)
     {
-        _store = store;
+        _singleStore = store;
+        _transactions = transactions;
+        _roleGuard = roleGuard;
+    }
+
+    public SqlEngine(DatabaseEngine database, TransactionManager transactions)
+        : this(database, transactions, roleGuard: null)
+    {
+    }
+
+    public SqlEngine(DatabaseEngine database, TransactionManager transactions, RaftRoleGuard? roleGuard)
+    {
+        _database = database;
         _transactions = transactions;
         _roleGuard = roleGuard;
     }
@@ -41,6 +54,7 @@ public sealed class SqlEngine
             SqlBeginStatement => Begin(),
             SqlCommitStatement => await CommitAsync(request.TransactionId),
             SqlRollbackStatement => Rollback(request.TransactionId),
+            SqlCreateTableStatement create => await CreateTableAsync(create),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
             SqlSelectStatement select => await SelectAsync(select, request.TransactionId),
             SqlUpdateStatement update => await UpdateAsync(update, request.TransactionId),
@@ -90,14 +104,14 @@ public sealed class SqlEngine
     {
         if (transactionId is Guid id)
         {
-            if (!_transactions.TryStagePut(id, statement.Key, statement.Value, out _))
+            if (!_transactions.TryStagePut(id, statement.Table, statement.Key, statement.Value, out _))
             {
                 throw TransactionNotFound();
             }
         }
         else
         {
-            await _store.PutAsync(statement.Key, statement.Value);
+            await PutAsync(statement.Table, statement.Key, statement.Value);
         }
 
         return SqlExecutionResult.Acknowledged("INSERT", rowsAffected: 1, transactionId);
@@ -110,14 +124,14 @@ public sealed class SqlEngine
         if (statement.Key is not null)
         {
             var row = transactionId is Guid id
-                ? await GetTransactionRowAsync(id, statement.Key)
-                : await _store.GetAsync(statement.Key);
+                ? await GetTransactionRowAsync(id, statement.Table, statement.Key)
+                : await GetAsync(statement.Table, statement.Key);
 
             rows = row is null ? [] : [row];
         }
         else if (transactionId is Guid id)
         {
-            var result = await _transactions.RangeAsync(id, statement.Start, statement.End, statement.Limit);
+            var result = await _transactions.RangeAsync(id, statement.Table, statement.Start, statement.End, statement.Limit);
             if (!result.FoundTransaction)
             {
                 throw TransactionNotFound();
@@ -127,7 +141,7 @@ public sealed class SqlEngine
         }
         else
         {
-            rows = await _store.RangeAsync(statement.Start, statement.End, statement.Limit);
+            rows = await RangeAsync(statement.Table, statement.Start, statement.End, statement.Limit);
         }
 
         var projectedRows = rows
@@ -142,14 +156,14 @@ public sealed class SqlEngine
     {
         if (transactionId is Guid id)
         {
-            if (!_transactions.TryStagePut(id, statement.Key, statement.Value, out _))
+            if (!_transactions.TryStagePut(id, statement.Table, statement.Key, statement.Value, out _))
             {
                 throw TransactionNotFound();
             }
         }
         else
         {
-            await _store.PutAsync(statement.Key, statement.Value);
+            await PutAsync(statement.Table, statement.Key, statement.Value);
         }
 
         return SqlExecutionResult.Acknowledged("UPDATE", rowsAffected: 1, transactionId);
@@ -159,28 +173,89 @@ public sealed class SqlEngine
     {
         if (transactionId is Guid id)
         {
-            if (!_transactions.TryStageDelete(id, statement.Key, out _))
+            if (!_transactions.TryStageDelete(id, statement.Table, statement.Key, out _))
             {
                 throw TransactionNotFound();
             }
         }
         else
         {
-            await _store.DeleteAsync(statement.Key);
+            await DeleteAsync(statement.Table, statement.Key);
         }
 
         return SqlExecutionResult.Acknowledged("DELETE", rowsAffected: 1, transactionId);
     }
 
-    private async Task<KeyValueRow?> GetTransactionRowAsync(Guid transactionId, string key)
+    private async Task<SqlExecutionResult> CreateTableAsync(SqlCreateTableStatement statement)
     {
-        var result = await _transactions.GetAsync(transactionId, key);
+        if (_database is null)
+        {
+            EnsureDefaultTable(statement.Table);
+            return SqlExecutionResult.Acknowledged("CREATE TABLE", rowsAffected: 0, message: "table already exists");
+        }
+
+        var created = await _database.CreateTableAsync(statement.Table);
+        return SqlExecutionResult.Acknowledged(
+            "CREATE TABLE",
+            rowsAffected: created ? 1 : 0,
+            message: created ? "table created" : "table already exists");
+    }
+
+    private async Task<KeyValueRow?> GetTransactionRowAsync(Guid transactionId, string table, string key)
+    {
+        var result = await _transactions.GetAsync(transactionId, table, key);
         if (!result.FoundTransaction)
         {
             throw TransactionNotFound();
         }
 
         return result.Row;
+    }
+
+    private async Task PutAsync(string table, string key, string value)
+    {
+        if (_database is not null)
+        {
+            await _database.PutAsync(table, key, value);
+            return;
+        }
+
+        EnsureDefaultTable(table);
+        await _singleStore!.PutAsync(key, value);
+    }
+
+    private async Task DeleteAsync(string table, string key)
+    {
+        if (_database is not null)
+        {
+            await _database.DeleteAsync(table, key);
+            return;
+        }
+
+        EnsureDefaultTable(table);
+        await _singleStore!.DeleteAsync(key);
+    }
+
+    private async Task<KeyValueRow?> GetAsync(string table, string key)
+    {
+        if (_database is not null)
+        {
+            return await _database.GetAsync(table, key);
+        }
+
+        EnsureDefaultTable(table);
+        return await _singleStore!.GetAsync(key);
+    }
+
+    private async Task<IReadOnlyList<KeyValueRow>> RangeAsync(string table, string? start, string? end, int limit)
+    {
+        if (_database is not null)
+        {
+            return await _database.RangeAsync(table, start, end, limit);
+        }
+
+        EnsureDefaultTable(table);
+        return await _singleStore!.RangeAsync(start, end, limit);
     }
 
     private static IReadOnlyDictionary<string, string> Project(KeyValueRow row, IReadOnlyList<string> columns)
@@ -212,5 +287,14 @@ public sealed class SqlEngine
     private static SqlExecutionException TransactionNotFound()
     {
         return new SqlExecutionException("transaction not found", StatusCodes.Status404NotFound);
+    }
+
+    private static void EnsureDefaultTable(string table)
+    {
+        var normalized = TableNames.Normalize(table);
+        if (!string.Equals(normalized, TableNames.Default, StringComparison.Ordinal))
+        {
+            throw new SqlExecutionException($"table '{normalized}' not found", StatusCodes.Status404NotFound);
+        }
     }
 }

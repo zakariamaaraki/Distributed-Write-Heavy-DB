@@ -37,18 +37,21 @@ internal sealed record SqlCommitStatement() : SqlStatement("COMMIT");
 
 internal sealed record SqlRollbackStatement() : SqlStatement("ROLLBACK");
 
-internal sealed record SqlInsertStatement(string Key, string Value) : SqlStatement("INSERT");
+internal sealed record SqlCreateTableStatement(string Table) : SqlStatement("CREATE TABLE");
+
+internal sealed record SqlInsertStatement(string Table, string Key, string Value) : SqlStatement("INSERT");
 
 internal sealed record SqlSelectStatement(
+    string Table,
     IReadOnlyList<string> Columns,
     string? Key,
     string? Start,
     string? End,
     int Limit) : SqlStatement("SELECT");
 
-internal sealed record SqlUpdateStatement(string Key, string Value) : SqlStatement("UPDATE");
+internal sealed record SqlUpdateStatement(string Table, string Key, string Value) : SqlStatement("UPDATE");
 
-internal sealed record SqlDeleteStatement(string Key) : SqlStatement("DELETE");
+internal sealed record SqlDeleteStatement(string Table, string Key) : SqlStatement("DELETE");
 
 public sealed class SqlParseException : Exception
 {

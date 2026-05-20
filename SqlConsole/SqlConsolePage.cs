@@ -501,6 +501,9 @@ internal static class SqlConsolePage
       <section class="sidebar-section">
         <span class="label">Suggested queries</span>
         <div class="query-list">
+          <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
+          <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada"}')</button>
+          <button class="snippet" data-query="SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50">SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50</button>
           <button class="snippet" data-query="SELECT * FROM kv WHERE key = 'alpha'">SELECT * FROM kv WHERE key = 'alpha'</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100">SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50">SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50</button>
@@ -545,7 +548,7 @@ internal static class SqlConsolePage
             <button id="clearEditor">Clear</button>
           </div>
         </div>
-        <textarea id="queryEditor" class="editor" spellcheck="false">SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100</textarea>
+        <textarea id="queryEditor" class="editor" spellcheck="false">CREATE TABLE users</textarea>
       </section>
 
       <section class="results">

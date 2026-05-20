@@ -40,7 +40,7 @@
   <rect class="page" x="0" y="0" width="1600" height="980"/>
   <rect class="header" x="0" y="0" width="1600" height="86"/>
   <text class="title" x="800" y="55" text-anchor="middle">High-Level Architecture</text>
-  <text class="subtitle" x="800" y="118" text-anchor="middle">Distributed write-heavy key/value database: one write leader, follower read replicas, replayable change log, and local LSM storage.</text>
+  <text class="subtitle" x="800" y="118" text-anchor="middle">Distributed write-heavy key/value database: one write leader, follower read replicas, multiple table-local LSM trees, and one replayable change log.</text>
 
   <!-- Cluster routing lane -->
   <rect class="band" x="60" y="150" width="1480" height="350" rx="18"/>
@@ -90,7 +90,7 @@
 
   <!-- Leader local write path lane -->
   <rect class="band" x="60" y="550" width="1480" height="360" rx="18"/>
-  <text class="band-title" x="100" y="592">Leader Local Write Path</text>
+  <text class="band-title" x="100" y="592">Leader Local Write Path - Per Table</text>
 
   <rect class="box" x="100" y="650" width="175" height="90" rx="12"/>
   <text class="label" x="187.5" y="684" text-anchor="middle">API / SQL</text>
@@ -101,11 +101,11 @@
   <text class="small" x="402.5" y="714" text-anchor="middle">stage until commit</text>
 
   <rect class="box" x="530" y="650" width="175" height="90" rx="12"/>
-  <text class="label" x="617.5" y="684" text-anchor="middle">WAL</text>
+  <text class="label" x="617.5" y="684" text-anchor="middle">Table WAL</text>
   <text class="small" x="617.5" y="714" text-anchor="middle">durable first</text>
 
   <rect class="box" x="745" y="650" width="175" height="90" rx="12"/>
-  <text class="label" x="832.5" y="684" text-anchor="middle">MemTable</text>
+  <text class="label" x="832.5" y="684" text-anchor="middle">Table MemTable</text>
   <text class="small" x="832.5" y="714" text-anchor="middle">ordered memory</text>
 
   <rect class="box" x="960" y="650" width="175" height="90" rx="12"/>
@@ -127,7 +127,7 @@
   <text class="small" x="832.5" y="850" text-anchor="middle">size threshold</text>
 
   <rect class="box" x="960" y="790" width="175" height="80" rx="12"/>
-  <text class="label" x="1047.5" y="822" text-anchor="middle">SSTables</text>
+  <text class="label" x="1047.5" y="822" text-anchor="middle">Table SSTables</text>
   <text class="small" x="1047.5" y="850" text-anchor="middle">immutable sorted files</text>
 
   <rect class="box" x="1175" y="790" width="175" height="80" rx="12"/>

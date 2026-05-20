@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using LsmWriteDb.Raft;
+using LsmWriteDb.Storage;
 
 namespace LsmWriteDb.Sql;
 
@@ -18,6 +19,10 @@ public static class SqlEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
             catch (SqlExecutionException ex) when (ex.StatusCode == StatusCodes.Status404NotFound)
+            {
+                return Results.NotFound(new { error = ex.Message });
+            }
+            catch (TableNotFoundException ex)
             {
                 return Results.NotFound(new { error = ex.Message });
             }

@@ -17,12 +17,18 @@ public sealed record TransactionRangeRead(bool FoundTransaction, IReadOnlyList<K
 
 public sealed class TransactionManager
 {
-    private readonly LsmStore _store;
+    private readonly DatabaseEngine? _database;
+    private readonly LsmStore? _singleStore;
     private readonly ConcurrentDictionary<Guid, TransactionBuffer> _transactions = new();
+
+    public TransactionManager(DatabaseEngine database)
+    {
+        _database = database;
+    }
 
     public TransactionManager(LsmStore store)
     {
-        _store = store;
+        _singleStore = store;
     }
 
     public TransactionInfo Begin()
@@ -38,6 +44,12 @@ public sealed class TransactionManager
 
     public bool TryStagePut(Guid transactionId, string key, string value, out TransactionInfo? transaction)
     {
+        return TryStagePut(transactionId, TableNames.Default, key, value, out transaction);
+    }
+
+    public bool TryStagePut(Guid transactionId, string table, string key, string value, out TransactionInfo? transaction)
+    {
+        var normalizedTable = TableNames.Normalize(table);
         ValidateKey(key);
 
         if (!_transactions.TryGetValue(transactionId, out var buffer))
@@ -46,11 +58,17 @@ public sealed class TransactionManager
             return false;
         }
 
-        return buffer.TryStage(TransactionWrite.Put(key, value), out transaction);
+        return buffer.TryStage(TransactionWrite.Put(normalizedTable, key, value), out transaction);
     }
 
     public bool TryStageDelete(Guid transactionId, string key, out TransactionInfo? transaction)
     {
+        return TryStageDelete(transactionId, TableNames.Default, key, out transaction);
+    }
+
+    public bool TryStageDelete(Guid transactionId, string table, string key, out TransactionInfo? transaction)
+    {
+        var normalizedTable = TableNames.Normalize(table);
         ValidateKey(key);
 
         if (!_transactions.TryGetValue(transactionId, out var buffer))
@@ -59,11 +77,17 @@ public sealed class TransactionManager
             return false;
         }
 
-        return buffer.TryStage(TransactionWrite.Delete(key), out transaction);
+        return buffer.TryStage(TransactionWrite.Delete(normalizedTable, key), out transaction);
     }
 
     public async Task<TransactionValueRead> GetAsync(Guid transactionId, string key)
     {
+        return await GetAsync(transactionId, TableNames.Default, key);
+    }
+
+    public async Task<TransactionValueRead> GetAsync(Guid transactionId, string table, string key)
+    {
+        var normalizedTable = TableNames.Normalize(table);
         ValidateKey(key);
 
         if (!_transactions.TryGetValue(transactionId, out var buffer))
@@ -71,14 +95,14 @@ public sealed class TransactionManager
             return new TransactionValueRead(FoundTransaction: false, Row: null);
         }
 
-        if (!buffer.TryGetStaged(key, out var staged))
+        if (!buffer.TryGetStaged(normalizedTable, key, out var staged))
         {
             if (buffer.IsClosed)
             {
                 return new TransactionValueRead(FoundTransaction: false, Row: null);
             }
 
-            return new TransactionValueRead(FoundTransaction: true, Row: await _store.GetAsync(key));
+            return new TransactionValueRead(FoundTransaction: true, Row: await ReadCommittedAsync(normalizedTable, key));
         }
 
         return new TransactionValueRead(FoundTransaction: true, Row: staged.ToRowOrNull());
@@ -86,6 +110,12 @@ public sealed class TransactionManager
 
     public async Task<TransactionRangeRead> RangeAsync(Guid transactionId, string? start, string? end, int limit)
     {
+        return await RangeAsync(transactionId, TableNames.Default, start, end, limit);
+    }
+
+    public async Task<TransactionRangeRead> RangeAsync(Guid transactionId, string table, string? start, string? end, int limit)
+    {
+        var normalizedTable = TableNames.Normalize(table);
         if (!_transactions.TryGetValue(transactionId, out var buffer))
         {
             return new TransactionRangeRead(FoundTransaction: false, Rows: []);
@@ -99,12 +129,12 @@ public sealed class TransactionManager
         var boundedLimit = Math.Clamp(limit, 1, 1_000);
         var rowsByKey = new SortedDictionary<string, KeyValueRow>(StringComparer.Ordinal);
 
-        foreach (var row in await _store.RangeAsync(start, end, 1_000))
+        foreach (var row in await ReadCommittedRangeAsync(normalizedTable, start, end, 1_000))
         {
             rowsByKey[row.Key] = row;
         }
 
-        foreach (var write in stagedWrites)
+        foreach (var write in stagedWrites.Where(write => string.Equals(write.Table, normalizedTable, StringComparison.Ordinal)))
         {
             if (!IsInsideRange(write.Key, start, end))
             {
@@ -139,7 +169,7 @@ public sealed class TransactionManager
             return null;
         }
 
-        await _store.ApplyBatchAsync(operations);
+        await ApplyBatchAsync(operations);
 
         _transactions.TryRemove(transactionId, out _);
         return new TransactionCommit(transactionId, operations.Count);
@@ -183,12 +213,57 @@ public sealed class TransactionManager
             throw new ArgumentException("Key is required.", nameof(key));
         }
     }
+
+    private async Task<KeyValueRow?> ReadCommittedAsync(string table, string key)
+    {
+        if (_database is not null)
+        {
+            return await _database.GetAsync(table, key);
+        }
+
+        EnsureDefaultTable(table);
+        return await _singleStore!.GetAsync(key);
+    }
+
+    private async Task<IReadOnlyList<KeyValueRow>> ReadCommittedRangeAsync(
+        string table,
+        string? start,
+        string? end,
+        int limit)
+    {
+        if (_database is not null)
+        {
+            return await _database.RangeAsync(table, start, end, limit);
+        }
+
+        EnsureDefaultTable(table);
+        return await _singleStore!.RangeAsync(start, end, limit);
+    }
+
+    private async Task ApplyBatchAsync(IReadOnlyList<StoreWriteOperation> operations)
+    {
+        if (_database is not null)
+        {
+            await _database.ApplyBatchAsync(operations);
+            return;
+        }
+
+        await _singleStore!.ApplyBatchAsync(operations);
+    }
+
+    private static void EnsureDefaultTable(string table)
+    {
+        if (!string.Equals(table, TableNames.Default, StringComparison.Ordinal))
+        {
+            throw new TableNotFoundException(table);
+        }
+    }
 }
 
 internal sealed class TransactionBuffer
 {
     private readonly object _mutex = new();
-    private readonly Dictionary<string, TransactionWrite> _writes = new(StringComparer.Ordinal);
+    private readonly Dictionary<TransactionWriteKey, TransactionWrite> _writes = new();
     private bool _closed;
     private DateTimeOffset _updatedAt;
 
@@ -237,14 +312,14 @@ internal sealed class TransactionBuffer
                 return false;
             }
 
-            _writes[write.Key] = write;
+            _writes[new TransactionWriteKey(write.Table, write.Key)] = write;
             _updatedAt = DateTimeOffset.UtcNow;
             transaction = ToInfoCore();
             return true;
         }
     }
 
-    public bool TryGetStaged(string key, out TransactionWrite write)
+    public bool TryGetStaged(string table, string key, out TransactionWrite write)
     {
         lock (_mutex)
         {
@@ -254,7 +329,7 @@ internal sealed class TransactionBuffer
                 return false;
             }
 
-            return _writes.TryGetValue(key, out write!);
+            return _writes.TryGetValue(new TransactionWriteKey(table, key), out write!);
         }
     }
 
@@ -311,21 +386,26 @@ internal sealed class TransactionBuffer
     }
 }
 
-internal sealed record TransactionWrite(string Key, string? Value, bool IsDeleted)
+internal sealed record TransactionWriteKey(string Table, string Key);
+
+internal sealed record TransactionWrite(string Table, string Key, string? Value, bool IsDeleted)
 {
-    public static TransactionWrite Put(string key, string value)
+    public static TransactionWrite Put(string table, string key, string value)
     {
-        return new TransactionWrite(key, value, IsDeleted: false);
+        return new TransactionWrite(TableNames.Normalize(table), key, value, IsDeleted: false);
     }
 
-    public static TransactionWrite Delete(string key)
+    public static TransactionWrite Delete(string table, string key)
     {
-        return new TransactionWrite(key, null, IsDeleted: true);
+        return new TransactionWrite(TableNames.Normalize(table), key, null, IsDeleted: true);
     }
 
     public StoreWriteOperation ToStoreOperation()
     {
-        return new StoreWriteOperation(Key, Value, IsDeleted);
+        return new StoreWriteOperation(Key, Value, IsDeleted)
+        {
+            Table = Table
+        };
     }
 
     public KeyValueRow? ToRowOrNull()

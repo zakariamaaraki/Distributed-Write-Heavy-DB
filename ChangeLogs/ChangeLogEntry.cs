@@ -1,3 +1,5 @@
+using LsmWriteDb.Storage;
+
 namespace LsmWriteDb.ChangeLogs;
 
 public sealed record ChangeLogEntry(
@@ -6,4 +8,7 @@ public sealed record ChangeLogEntry(
     string Key,
     string? Value,
     bool IsDeleted,
-    DateTimeOffset CommittedAt);
+    DateTimeOffset CommittedAt)
+{
+    public string Table { get; init; } = TableNames.Default;
+}

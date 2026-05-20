@@ -398,6 +398,7 @@ internal static class ChangeLogConsolePage
         .map(entry => `
           <tr>
             <td>${escapeHtml(String(entry.sequence ?? ''))}</td>
+            <td>${escapeHtml(entry.table ?? 'kv')}</td>
             <td>${escapeHtml(entry.operation ?? '')}</td>
             <td>${escapeHtml(entry.key ?? '')}</td>
             <td>${escapeHtml(entry.value ?? '')}</td>
@@ -412,6 +413,7 @@ internal static class ChangeLogConsolePage
           <thead>
             <tr>
               <th>Sequence</th>
+              <th>Table</th>
               <th>Operation</th>
               <th>Key</th>
               <th>Value</th>

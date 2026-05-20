@@ -1,3 +1,4 @@
+using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Transactions;
 
@@ -144,6 +145,46 @@ public sealed class TransactionManagerTests
             var store = await CreateStoreAsync(dataPath);
 
             Assert.Null(await store.GetAsync("alpha"));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
+    [Fact]
+    public async Task CommitAsync_CanPersistStagedWritesAcrossTables()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var options = new LsmStoreOptions(dataPath, FlushThreshold: 100);
+            var database = new DatabaseEngine(options, new ChangeLogService(options));
+            await database.InitializeAsync();
+            await database.CreateTableAsync("users");
+            await database.CreateTableAsync("orders");
+
+            var transactions = new TransactionManager(database);
+            var transaction = transactions.Begin();
+
+            Assert.True(transactions.TryStagePut(transaction.TransactionId, "users", "user:1", "Ada", out _));
+            Assert.True(transactions.TryStagePut(transaction.TransactionId, "orders", "order:1", "Book", out _));
+
+            var usersInside = await transactions.GetAsync(transaction.TransactionId, "users", "user:1");
+            var usersOutside = await database.GetAsync("users", "user:1");
+            var commit = await transactions.CommitAsync(transaction.TransactionId);
+
+            var committedUser = await database.GetAsync("users", "user:1");
+            var committedOrder = await database.GetAsync("orders", "order:1");
+
+            Assert.True(usersInside.FoundTransaction);
+            Assert.NotNull(usersInside.Row);
+            Assert.Null(usersOutside);
+            Assert.NotNull(commit);
+            Assert.Equal(2, commit.OperationCount);
+            Assert.Equal("Ada", committedUser!.Value);
+            Assert.Equal("Book", committedOrder!.Value);
         }
         finally
         {
