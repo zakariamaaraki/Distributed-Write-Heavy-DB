@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LsmWriteDb SQL Console</title>
+  <link rel="stylesheet" href="/sql-console/sql-console.css">
+  <script src="/sql-console/sql-console.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">SQL</div>
+        <div>
+          <h1>LsmWriteDb Console</h1>
+          <span>kv query workspace</span>
+        </div>
+      </div>
+
+      <section class="sidebar-section">
+        <label class="label" for="transactionId">Transaction</label>
+        <div class="transaction-row">
+          <input class="transaction-input" id="transactionId" placeholder="none" spellcheck="false">
+          <button id="clearTransaction" title="Clear transaction">Clear</button>
+        </div>
+      </section>
+
+      <section class="sidebar-section">
+        <span class="label">Suggested queries</span>
+        <div class="query-list">
+          <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
+          <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada"}')</button>
+          <button class="snippet" data-query="SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50">SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50</button>
+          <button class="snippet" data-query="SELECT * FROM kv WHERE key = 'alpha'">SELECT * FROM kv WHERE key = 'alpha'</button>
+          <button class="snippet" data-query="SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100">SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100</button>
+          <button class="snippet" data-query="SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50">SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50</button>
+          <button class="snippet" data-query="INSERT INTO kv (key, value) VALUES ('alpha', 'one')">INSERT INTO kv (key, value) VALUES ('alpha', 'one')</button>
+          <button class="snippet" data-query="UPDATE kv SET value = 'updated' WHERE key = 'alpha'">UPDATE kv SET value = 'updated' WHERE key = 'alpha'</button>
+          <button class="snippet" data-query="DELETE FROM kv WHERE key = 'alpha'">DELETE FROM kv WHERE key = 'alpha'</button>
+          <button class="snippet" data-query="BEGIN TRANSACTION">BEGIN TRANSACTION</button>
+          <button class="snippet" data-query="COMMIT TRANSACTION">COMMIT TRANSACTION</button>
+          <button class="snippet" data-query="ROLLBACK TRANSACTION">ROLLBACK TRANSACTION</button>
+        </div>
+      </section>
+
+      <section class="sidebar-section history">
+        <span class="label">History</span>
+        <div id="history"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="status-group">
+          <span id="serviceStatus" class="pill warn">service <strong>checking</strong></span>
+          <span id="transactionStatus" class="pill">transaction <strong>none</strong></span>
+        </div>
+        <div class="status-group">
+          <span class="pill">endpoint <strong>/sql</strong></span>
+          <span class="pill">table <strong>kv</strong></span>
+          <a class="pill" href="/changes-console">changes <strong>stream</strong></a>
+        </div>
+      </header>
+
+      <section class="editor-shell">
+        <div class="toolbar">
+          <div class="toolbar-group">
+            <button id="runQuery" class="primary">Run</button>
+            <button id="beginTransaction" class="green">Begin</button>
+            <button id="commitTransaction" class="orange">Commit</button>
+            <button id="rollbackTransaction" class="red">Rollback</button>
+          </div>
+          <div class="toolbar-group">
+            <button id="formatQuery">Format</button>
+            <button id="clearEditor">Clear</button>
+          </div>
+        </div>
+        <textarea id="queryEditor" class="editor" spellcheck="false">CREATE TABLE users</textarea>
+      </section>
+
+      <section class="results">
+        <div class="results-head">
+          <h2>Result</h2>
+          <div class="result-meta">
+            <span id="statementType" class="pill">statement <strong>none</strong></span>
+            <span id="rowsAffected" class="pill">rows <strong>0</strong></span>
+            <span id="elapsedTime" class="pill">time <strong>0 ms</strong></span>
+          </div>
+        </div>
+        <div id="resultBody" class="result-body">
+          <div class="empty">No result yet.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+</body>
+</html>

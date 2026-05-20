@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LsmWriteDb.StaticAssets;
 using Microsoft.AspNetCore.Mvc;
 
 namespace LsmWriteDb.ChangeLogs;
@@ -24,7 +25,8 @@ public static class ChangeLogEndpoints
         });
 
         app.MapGet("/changes/stream", StreamChangesAsync);
-        app.MapGet("/changes-console", () => Results.Content(ChangeLogConsolePage.Html, "text/html; charset=utf-8"));
+        app.MapGet("/changes-console", (IWebHostEnvironment environment) =>
+            StaticPageResults.Html(environment, "changes-console", "index.html"));
 
         return app;
     }

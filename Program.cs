@@ -33,6 +33,8 @@ var app = builder.Build();
 var database = app.Services.GetRequiredService<DatabaseEngine>();
 await database.InitializeAsync();
 
+app.UseStaticFiles();
+
 app.MapGet("/", () => Results.Ok(new { name = "Simple LSM Write Database" }));
 
 app.MapTableEndpoints();

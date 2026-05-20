@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LsmWriteDb Change Log</title>
+  <link rel="stylesheet" href="/changes-console/change-log-console.css">
+  <script src="/changes-console/change-log-console.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">CDC</div>
+        <div>
+          <h1>Change Log Stream</h1>
+          <span>replay and watch committed kv changes</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="/sql-console">SQL console</a>
+        <a href="/stats">Stats</a>
+      </nav>
+    </header>
+
+    <section class="controls">
+      <div class="field">
+        <label for="fromSequence">Start after sequence</label>
+        <input id="fromSequence" type="number" min="0" step="1" value="0">
+      </div>
+      <button id="connect" class="primary">Connect</button>
+      <button id="disconnect" class="red" disabled>Disconnect</button>
+      <button id="loadReplay">Load replay</button>
+      <span id="status" class="pill">stream <strong>idle</strong></span>
+    </section>
+
+    <main class="content">
+      <div class="summary">
+        <span id="eventCount" class="pill">events <strong>0</strong></span>
+        <span id="lastSequence" class="pill">last sequence <strong>0</strong></span>
+        <span class="pill">endpoint <strong>/changes/stream</strong></span>
+      </div>
+      <div id="tableHost" class="empty">No change events loaded.</div>
+    </main>
+  </div>
+</body>
+</html>
