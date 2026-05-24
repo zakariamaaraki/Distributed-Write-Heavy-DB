@@ -31,7 +31,7 @@ This project is database backed by a write-optimized key/value store.
 
 ## High-Level Architecture
 
-![High-level architecture of the distributed LSM database](/docs/high-level-architecture.svg)
+![High-level architecture of the distributed LSM database](./docs/high-level-architecture.svg)
 
 ## Data Model
 
@@ -371,11 +371,11 @@ from the storage engine.
 
 Leader election:
 
-![Raft leader election](/docs/raft-leader-election.gif)
+![Raft leader election](./docs/raft-leader-election.gif)
 
 Change-log subscription:
 
-![Raft change-log watch](/docs/raft-change-log-watch.gif)
+![Raft change-log watch](./docs/raft-change-log-watch.gif)
 
 Each node has a role:
 
@@ -479,7 +479,7 @@ frontend build step. The page posts queries to `/sql`, renders returned rows as 
 table, stores recent queries in browser local storage, and keeps the active
 transaction id in the console input.
 
-![SQL console screenshot](/docs/sql-console.png)
+![SQL console screenshot](./docs/sql-console.png)
 
 The console has direct controls for `BEGIN`, `COMMIT`, and `ROLLBACK`. When
 `BEGIN` returns a transaction id, the console stores it and sends it with later
@@ -494,7 +494,7 @@ watching committed change-log events. Enter the last processed sequence, connect
 to the stream, and the page shows replayed and live events in a table. It uses
 `/changes/stream` for live updates and `/changes` for one-time replay.
 
-![Change log console screenshot](/docs/change-log-console.png)
+![Change log console screenshot](./docs/change-log-console.png)
 
 ### Ordered MemTable
 
