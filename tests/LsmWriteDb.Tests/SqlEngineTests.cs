@@ -17,14 +17,14 @@ public sealed class SqlEngineTests
             var engine = await CreateEngineAsync(dataPath);
 
             var insert = await engine.ExecuteAsync(new SqlQueryRequest(
-                "INSERT INTO kv (key, value) VALUES ('alpha', 'one')",
+                "INSERT INTO kv (key, value) VALUES ('alpha', '{\"text\":\"one\"}')",
                 TransactionId: null));
             var firstSelect = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT key, value FROM kv WHERE key = 'alpha'",
                 TransactionId: null));
 
             await engine.ExecuteAsync(new SqlQueryRequest(
-                "UPDATE kv SET value = 'updated' WHERE key = 'alpha'",
+                "UPDATE kv SET value = '{\"text\":\"updated\"}' WHERE key = 'alpha'",
                 TransactionId: null));
             var secondSelect = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT value FROM kv WHERE key = 'alpha'",
@@ -41,10 +41,10 @@ public sealed class SqlEngineTests
             Assert.Equal(1, insert.RowsAffected);
             Assert.Single(firstSelect.Rows);
             Assert.Equal("alpha", firstSelect.Rows[0]["key"]);
-            Assert.Equal("one", firstSelect.Rows[0]["value"]);
+            Assert.Equal("{\"text\":\"one\"}", firstSelect.Rows[0]["value"]);
             Assert.Single(secondSelect.Rows);
             Assert.False(secondSelect.Rows[0].ContainsKey("key"));
-            Assert.Equal("updated", secondSelect.Rows[0]["value"]);
+            Assert.Equal("{\"text\":\"updated\"}", secondSelect.Rows[0]["value"]);
             Assert.Empty(afterDelete.Rows);
         }
         finally
@@ -62,9 +62,9 @@ public sealed class SqlEngineTests
         {
             var engine = await CreateEngineAsync(dataPath);
 
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', 'one')", null));
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('bravo', 'two')", null));
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('charlie', 'three')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', '{\"text\":\"one\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('bravo', '{\"text\":\"two\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('charlie', '{\"text\":\"three\"}')", null));
 
             var result = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT key FROM kv WHERE key BETWEEN 'alpha' AND 'charlie' LIMIT 2",
@@ -95,7 +95,7 @@ public sealed class SqlEngineTests
 
             var transactionId = begin.TransactionId.Value;
             await engine.ExecuteAsync(new SqlQueryRequest(
-                "INSERT INTO kv (key, value) VALUES ('alpha', 'one')",
+                "INSERT INTO kv (key, value) VALUES ('alpha', '{\"text\":\"one\"}')",
                 transactionId));
 
             var outsideTransaction = await engine.ExecuteAsync(new SqlQueryRequest(
@@ -107,7 +107,7 @@ public sealed class SqlEngineTests
 
             Assert.Empty(outsideTransaction.Rows);
             Assert.Single(insideTransaction.Rows);
-            Assert.Equal("one", insideTransaction.Rows[0]["value"]);
+            Assert.Equal("{\"text\":\"one\"}", insideTransaction.Rows[0]["value"]);
 
             var commit = await engine.ExecuteAsync(new SqlQueryRequest("COMMIT", transactionId));
             var afterCommit = await engine.ExecuteAsync(new SqlQueryRequest(
@@ -117,7 +117,7 @@ public sealed class SqlEngineTests
             Assert.Equal("COMMIT", commit.StatementType);
             Assert.Equal(1, commit.RowsAffected);
             Assert.Single(afterCommit.Rows);
-            Assert.Equal("one", afterCommit.Rows[0]["value"]);
+            Assert.Equal("{\"text\":\"one\"}", afterCommit.Rows[0]["value"]);
         }
         finally
         {
@@ -137,7 +137,7 @@ public sealed class SqlEngineTests
             var transactionId = begin.TransactionId!.Value;
 
             await engine.ExecuteAsync(new SqlQueryRequest(
-                "INSERT INTO kv VALUES ('alpha', 'one')",
+                "INSERT INTO kv VALUES ('alpha', '{\"text\":\"one\"}')",
                 transactionId));
             var rollback = await engine.ExecuteAsync(new SqlQueryRequest("ROLLBACK", transactionId));
             var afterRollback = await engine.ExecuteAsync(new SqlQueryRequest(
@@ -163,14 +163,14 @@ public sealed class SqlEngineTests
             var engine = await CreateEngineAsync(dataPath);
 
             await engine.ExecuteAsync(new SqlQueryRequest(
-                "INSERT INTO kv VALUES ('quote', 'it''s stored')",
+                "INSERT INTO kv VALUES ('quote', '{\"text\":\"it''s stored\"}')",
                 TransactionId: null));
             var result = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT value FROM kv WHERE key = 'quote'",
                 TransactionId: null));
 
             Assert.Single(result.Rows);
-            Assert.Equal("it's stored", result.Rows[0]["value"]);
+            Assert.Equal("{\"text\":\"it's stored\"}", result.Rows[0]["value"]);
         }
         finally
         {
@@ -189,8 +189,8 @@ public sealed class SqlEngineTests
 
             var createUsers = await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
             await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE orders", null));
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('same', 'user-value')", null));
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('same', 'order-value')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('same', '{\"text\":\"user-value\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('same', '{\"text\":\"order-value\"}')", null));
 
             var users = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT value FROM users WHERE key = 'same'",
@@ -204,8 +204,8 @@ public sealed class SqlEngineTests
 
             Assert.Equal("CREATE TABLE", createUsers.StatementType);
             Assert.Equal(1, createUsers.RowsAffected);
-            Assert.Equal("user-value", users.Rows.Single()["value"]);
-            Assert.Equal("order-value", orders.Rows.Single()["value"]);
+            Assert.Equal("{\"text\":\"user-value\"}", users.Rows.Single()["value"]);
+            Assert.Equal("{\"text\":\"order-value\"}", orders.Rows.Single()["value"]);
             Assert.Empty(defaultTable.Rows);
         }
         finally
@@ -228,8 +228,8 @@ public sealed class SqlEngineTests
             var begin = await engine.ExecuteAsync(new SqlQueryRequest("BEGIN", null));
             var transactionId = begin.TransactionId!.Value;
 
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('user:1', 'Ada')", transactionId));
-            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('order:1', 'Book')", transactionId));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('user:1', '{\"name\":\"Ada\"}')", transactionId));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('order:1', '{\"item\":\"Book\"}')", transactionId));
 
             var usersInside = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT value FROM users WHERE key = 'user:1'",
@@ -242,10 +242,76 @@ public sealed class SqlEngineTests
                 "SELECT value FROM orders WHERE key = 'order:1'",
                 TransactionId: null));
 
-            Assert.Equal("Ada", usersInside.Rows.Single()["value"]);
+            Assert.Equal("{\"name\":\"Ada\"}", usersInside.Rows.Single()["value"]);
             Assert.Empty(usersOutside.Rows);
             Assert.Equal(2, commit.RowsAffected);
-            Assert.Equal("Book", ordersAfterCommit.Rows.Single()["value"]);
+            Assert.Equal("{\"item\":\"Book\"}", ordersAfterCommit.Rows.Single()["value"]);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SelectsRowsByJsonValueProperty()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('user:1001', '{\"name\":\"Ada\",\"tier\":\"gold\",\"profile\":{\"city\":\"Paris\"}}')",
+                null));
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('user:1002', '{\"name\":\"Grace\",\"tier\":\"silver\",\"profile\":{\"city\":\"Paris\"}}')",
+                null));
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('user:1003', '{\"name\":\"Linus\",\"tier\":\"gold\",\"profile\":{\"city\":\"Helsinki\"}}')",
+                null));
+
+            var goldUsers = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE value.tier = 'gold' LIMIT 10",
+                null));
+            var exactAda = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE value = '{\"name\":\"Ada\",\"tier\":\"gold\",\"profile\":{\"city\":\"Paris\"}}'",
+                null));
+            var parisUsersInRange = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE key >= 'user:1002' AND key <= 'user:1999' AND value.profile.city = 'Paris'",
+                null));
+
+            Assert.Equal(["user:1001", "user:1003"], goldUsers.Rows.Select(row => row["key"]));
+            Assert.Equal(["user:1001"], exactAda.Rows.Select(row => row["key"]));
+            Assert.Equal(["user:1002"], parisUsersInRange.Rows.Select(row => row["key"]));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RejectsSqlWritesWithInvalidJsonValues()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+
+            var insertError = await Assert.ThrowsAsync<SqlExecutionException>(() =>
+                engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', 'one')", null)));
+
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', '{\"text\":\"one\"}')", null));
+
+            var updateError = await Assert.ThrowsAsync<SqlExecutionException>(() =>
+                engine.ExecuteAsync(new SqlQueryRequest("UPDATE kv SET value = 'updated' WHERE key = 'alpha'", null)));
+
+            Assert.StartsWith("value must be valid JSON", insertError.Message);
+            Assert.StartsWith("value must be valid JSON", updateError.Message);
         }
         finally
         {

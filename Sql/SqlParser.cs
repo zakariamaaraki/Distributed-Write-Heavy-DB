@@ -138,13 +138,11 @@ internal sealed class SqlParser
         ExpectKeyword("FROM");
         var table = ExpectTableName();
 
-        string? key = null;
-        string? start = null;
-        string? end = null;
+        var where = SqlWhereClause.All;
 
         if (MatchKeyword("WHERE"))
         {
-            (key, start, end) = ParseWhereClause();
+            where = ParseWhereClause();
         }
 
         var limit = 100;
@@ -153,7 +151,7 @@ internal sealed class SqlParser
             limit = ExpectPositiveNumber();
         }
 
-        return new SqlSelectStatement(table, columns, key, start, end, limit);
+        return new SqlSelectStatement(table, columns, where, limit);
     }
 
     private IReadOnlyList<string> ParseSelectColumns()
@@ -173,67 +171,141 @@ internal sealed class SqlParser
         return columns;
     }
 
-    private (string? Key, string? Start, string? End) ParseWhereClause()
+    private SqlWhereClause ParseWhereClause()
     {
-        ExpectIdentifier("key");
+        var where = SqlWhereClause.All;
+        while (true)
+        {
+            where = MergeWhereClause(where, ParseWhereTerm());
+            if (!MatchKeyword("AND"))
+            {
+                return where;
+            }
+        }
+    }
 
+    private SqlWhereClause ParseWhereTerm()
+    {
+        var identifier = ExpectIdentifier();
+        if (string.Equals(identifier, "key", StringComparison.OrdinalIgnoreCase))
+        {
+            return ParseKeyWhereTerm();
+        }
+
+        if (string.Equals(identifier, "value", StringComparison.OrdinalIgnoreCase))
+        {
+            return ParseValueWhereTerm();
+        }
+
+        if (MatchKeyword("BETWEEN"))
+        {
+            throw Error("BETWEEN is supported only for key predicates.");
+        }
+
+        throw Error("WHERE supports key predicates and value JSON property predicates.");
+    }
+
+    private SqlWhereClause ParseKeyWhereTerm()
+    {
         if (MatchKeyword("BETWEEN"))
         {
             var start = ExpectStringLiteral();
             ExpectKeyword("AND");
             var end = ExpectStringLiteral();
-            return (null, start, end);
+            return new SqlWhereClause(null, start, end, null);
         }
 
         if (MatchSymbol("="))
         {
-            return (ExpectStringLiteral(), null, null);
+            return new SqlWhereClause(ExpectStringLiteral(), null, null, null);
         }
-
-        string? startBound = null;
-        string? endBound = null;
 
         if (MatchSymbol(">="))
         {
-            startBound = ExpectStringLiteral();
+            return new SqlWhereClause(null, ExpectStringLiteral(), null, null);
         }
-        else if (MatchSymbol("<="))
+
+        if (MatchSymbol("<="))
         {
-            endBound = ExpectStringLiteral();
+            return new SqlWhereClause(null, null, ExpectStringLiteral(), null);
         }
-        else
+
+        throw Error("WHERE supports key = 'value', key BETWEEN 'start' AND 'end', key >= 'start', key <= 'end', value = 'json', and value.property = 'value'.");
+    }
+
+    private SqlWhereClause ParseValueWhereTerm()
+    {
+        if (MatchSymbol("="))
         {
-            throw Error("WHERE supports key = 'value', key BETWEEN 'start' AND 'end', key >= 'start', and key <= 'end'.");
+            return new SqlWhereClause(null, null, null, new SqlValuePredicate([], ExpectStringLiteral()));
         }
 
-        if (MatchKeyword("AND"))
+        ExpectSymbol(".");
+
+        var path = new List<string> { ExpectIdentifier() };
+        while (MatchSymbol("."))
         {
-            ExpectIdentifier("key");
-            if (MatchSymbol(">="))
-            {
-                if (startBound is not null)
-                {
-                    throw Error("Duplicate lower key bound in WHERE clause.");
-                }
-
-                startBound = ExpectStringLiteral();
-            }
-            else if (MatchSymbol("<="))
-            {
-                if (endBound is not null)
-                {
-                    throw Error("Duplicate upper key bound in WHERE clause.");
-                }
-
-                endBound = ExpectStringLiteral();
-            }
-            else
-            {
-                throw Error("Range WHERE clauses support only key >= 'start' and key <= 'end'.");
-            }
+            path.Add(ExpectIdentifier());
         }
 
-        return (null, startBound, endBound);
+        ExpectSymbol("=");
+        return new SqlWhereClause(null, null, null, new SqlValuePredicate(path, ExpectStringLiteral()));
+    }
+
+    private SqlWhereClause MergeWhereClause(SqlWhereClause current, SqlWhereClause next)
+    {
+        if (next.Key is not null)
+        {
+            if (current.HasKeyFilter)
+            {
+                throw Error("Duplicate key predicate in WHERE clause.");
+            }
+
+            return current with { Key = next.Key };
+        }
+
+        var merged = current;
+        if (next.Start is not null)
+        {
+            if (current.Key is not null)
+            {
+                throw Error("Cannot combine key equality with key range predicates.");
+            }
+
+            if (current.Start is not null)
+            {
+                throw Error("Duplicate lower key bound in WHERE clause.");
+            }
+
+            merged = merged with { Start = next.Start };
+        }
+
+        if (next.End is not null)
+        {
+            if (current.Key is not null)
+            {
+                throw Error("Cannot combine key equality with key range predicates.");
+            }
+
+            if (current.End is not null)
+            {
+                throw Error("Duplicate upper key bound in WHERE clause.");
+            }
+
+            merged = merged with { End = next.End };
+        }
+
+        if (next.ValuePredicate is not null)
+        {
+            if (current.ValuePredicate is not null)
+            {
+                throw Error("Duplicate value predicate in WHERE clause.");
+            }
+
+            merged = merged with { ValuePredicate = next.ValuePredicate };
+        }
+
+        return merged;
     }
 
     private SqlUpdateStatement ParseUpdate()
@@ -447,7 +519,7 @@ internal static class SqlTokenizer
                 continue;
             }
 
-            if (current is '(' or ')' or ',' or ';' or '*' or '=')
+            if (current is '(' or ')' or ',' or ';' or '*' or '=' or '.')
             {
                 tokens.Add(new SqlToken(SqlTokenKind.Symbol, current.ToString()));
                 index++;

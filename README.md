@@ -14,8 +14,11 @@ This project is database backed by a write-optimized key/value store.
 - Support explicit transactions with begin, staged writes, commit, and rollback.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
-- Support SQL table creation, point reads, range reads, inserts, updates,
-  deletes, and transaction control.
+- Support SQL table creation, point reads, key range reads, inserts, updates,
+  deletes, transaction control, and equality filters over JSON `value`
+  documents or dot-path properties.
+- Enforce valid JSON documents for SQL `INSERT` and `UPDATE` values while
+  keeping the lower-level key/value storage string-based.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
@@ -31,7 +34,9 @@ This project is database backed by a write-optimized key/value store.
 ## Data Model
 
 The database stores named tables. Each table is an independent key/value LSM
-tree with string keys and string values.
+tree with string keys and string values. The SQL layer treats the `value`
+column as JSON: SQL writes must provide valid JSON, and SQL reads can filter by
+the full JSON value or by dot-path properties inside that value.
 
 Deletes are represented as tombstones so inserts, updates, and deletes can all
 move through the same write path inside that table.
@@ -65,17 +70,18 @@ The main pieces are:
 The SQL layer currently maps every database table to the same logical shape:
 
 ```sql
-table_name(key string, value string)
+table_name(key string, value json)
 ```
 
 This means SQL is a user-facing query language for the existing key/value store,
-not a separate storage engine or a full relational schema system.
+not a separate storage engine or a full relational schema system. SQL `INSERT`
+and `UPDATE` values must be valid JSON documents.
 
 Submit SQL with:
 
 ```json
 {
-  "query": "SELECT key, value FROM users WHERE key = 'user:1001'",
+  "query": "SELECT key, value FROM users WHERE value.tier = 'gold'",
   "transactionId": null
 }
 ```
@@ -87,12 +93,15 @@ Supported statements:
 - `BEGIN` or `BEGIN TRANSACTION`
 - `COMMIT` or `COMMIT TRANSACTION`
 - `ROLLBACK` or `ROLLBACK TRANSACTION`
-- `INSERT INTO users (key, value) VALUES ('user:1001', 'Ada')`
-- `INSERT INTO users VALUES ('user:1001', 'Ada')`
+- `INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')`
+- `INSERT INTO users VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')`
 - `SELECT * FROM users WHERE key = 'user:1001'`
 - `SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 100`
 - `SELECT key FROM users WHERE key >= 'user:1000' AND key <= 'user:1999'`
-- `UPDATE users SET value = 'updated' WHERE key = 'user:1001'`
+- `SELECT key FROM users WHERE value = '{"name":"Ada","tier":"gold"}'`
+- `SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 100`
+- `SELECT key FROM users WHERE key >= 'user:1000' AND value.name = 'Ada'`
+- `UPDATE users SET value = '{"name":"Ada","tier":"platinum"}' WHERE key = 'user:1001'`
 - `DELETE FROM users WHERE key = 'user:1001'`
 
 `BEGIN` returns a transaction id. Include that id in later `/sql` requests to
@@ -120,18 +129,27 @@ the result:
 
 ```json
 {
-  "query": "SELECT key, value FROM users WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50",
+  "query": "SELECT key, value FROM users WHERE key >= 'user:1000' AND key <= 'user:1999' AND value.tier = 'gold' LIMIT 50",
   "transactionId": "00000000-0000-0000-0000-000000000000"
 }
 ```
 
 That range query is translated to the same bounded key scan used by
 `GET /kv/range`, then the SQL engine overlays any staged writes or deletes from
-the transaction before applying the projection and limit.
+the transaction before applying JSON value predicates, projection, and limit.
+JSON property predicates use dot paths such as `value.profile.tier = 'gold'`.
+String properties are compared to the SQL string literal directly; numbers,
+booleans, and null compare to their JSON text such as `'42'`, `'true'`, and
+`'null'`.
+
+Value filters are evaluated by scanning the selected key range, so queries
+should include key bounds when possible. There are no secondary indexes for JSON
+properties.
 
 This is not a full relational SQL database. Tables do not define custom columns
 yet, and there are no joins, secondary indexes, or arbitrary predicates; SQL is
-currently another way to call the existing table/key/value operations.
+currently another way to call the existing table/key/value operations with
+bounded key scans for JSON property filters.
 
 ## HTTP API
 
@@ -570,7 +588,7 @@ network. Use `/raft/state` on each host port to see which node is leader.
 ## Non-Goals
 
 - No full relational SQL layer with schemas, joins, secondary indexes, or
-  arbitrary predicates.
+  arbitrary predicates beyond key filters and JSON value equality filters.
 - No dynamic Raft membership changes.
 - No full Raft log replication; followers replicate committed storage changes
   from the leader's durable change log after leader election.

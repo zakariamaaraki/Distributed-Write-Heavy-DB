@@ -108,7 +108,7 @@ public sealed class RaftNodeTests
                 new RaftRoleGuard(raftNode));
 
             await Assert.ThrowsAsync<RaftWriteRejectedException>(() => engine.ExecuteAsync(
-                new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', 'one')", TransactionId: null)));
+                new SqlQueryRequest("INSERT INTO kv VALUES ('alpha', '{\"text\":\"one\"}')", TransactionId: null)));
 
             var read = await engine.ExecuteAsync(new SqlQueryRequest(
                 "SELECT * FROM kv WHERE key = 'alpha'",

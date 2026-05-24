@@ -44,10 +44,21 @@ internal sealed record SqlInsertStatement(string Table, string Key, string Value
 internal sealed record SqlSelectStatement(
     string Table,
     IReadOnlyList<string> Columns,
+    SqlWhereClause Where,
+    int Limit) : SqlStatement("SELECT");
+
+internal sealed record SqlWhereClause(
     string? Key,
     string? Start,
     string? End,
-    int Limit) : SqlStatement("SELECT");
+    SqlValuePredicate? ValuePredicate)
+{
+    public static SqlWhereClause All { get; } = new(null, null, null, null);
+
+    public bool HasKeyFilter => Key is not null || Start is not null || End is not null;
+}
+
+internal sealed record SqlValuePredicate(IReadOnlyList<string> Path, string Expected);
 
 internal sealed record SqlUpdateStatement(string Table, string Key, string Value) : SqlStatement("UPDATE");
 

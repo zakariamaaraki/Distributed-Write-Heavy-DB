@@ -30,13 +30,14 @@
         <span class="label">Suggested queries</span>
         <div class="query-list">
           <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
-          <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada"}')</button>
+          <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;,&quot;tier&quot;:&quot;gold&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')</button>
           <button class="snippet" data-query="SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50">SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50</button>
+          <button class="snippet" data-query="SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50">SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50</button>
           <button class="snippet" data-query="SELECT * FROM kv WHERE key = 'alpha'">SELECT * FROM kv WHERE key = 'alpha'</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100">SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50">SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50</button>
-          <button class="snippet" data-query="INSERT INTO kv (key, value) VALUES ('alpha', 'one')">INSERT INTO kv (key, value) VALUES ('alpha', 'one')</button>
-          <button class="snippet" data-query="UPDATE kv SET value = 'updated' WHERE key = 'alpha'">UPDATE kv SET value = 'updated' WHERE key = 'alpha'</button>
+          <button class="snippet" data-query="INSERT INTO kv (key, value) VALUES ('alpha', '{&quot;text&quot;:&quot;one&quot;}')">INSERT INTO kv (key, value) VALUES ('alpha', '{"text":"one"}')</button>
+          <button class="snippet" data-query="UPDATE kv SET value = '{&quot;text&quot;:&quot;updated&quot;}' WHERE key = 'alpha'">UPDATE kv SET value = '{"text":"updated"}' WHERE key = 'alpha'</button>
           <button class="snippet" data-query="DELETE FROM kv WHERE key = 'alpha'">DELETE FROM kv WHERE key = 'alpha'</button>
           <button class="snippet" data-query="BEGIN TRANSACTION">BEGIN TRANSACTION</button>
           <button class="snippet" data-query="COMMIT TRANSACTION">COMMIT TRANSACTION</button>

@@ -2,6 +2,7 @@ using LsmWriteDb.Storage;
 using LsmWriteDb.Raft;
 using LsmWriteDb.Transactions;
 using Microsoft.AspNetCore.Http;
+using System.Text.Json;
 
 namespace LsmWriteDb.Sql;
 
@@ -102,6 +103,8 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> InsertAsync(SqlInsertStatement statement, Guid? transactionId)
     {
+        EnsureValidJsonValue(statement.Value);
+
         if (transactionId is Guid id)
         {
             if (!_transactions.TryStagePut(id, statement.Table, statement.Key, statement.Value, out _))
@@ -120,18 +123,20 @@ public sealed class SqlEngine
     private async Task<SqlExecutionResult> SelectAsync(SqlSelectStatement statement, Guid? transactionId)
     {
         IReadOnlyList<KeyValueRow> rows;
+        var where = statement.Where;
+        var scanLimit = where.ValuePredicate is null ? statement.Limit : 1_000;
 
-        if (statement.Key is not null)
+        if (where.Key is not null)
         {
             var row = transactionId is Guid id
-                ? await GetTransactionRowAsync(id, statement.Table, statement.Key)
-                : await GetAsync(statement.Table, statement.Key);
+                ? await GetTransactionRowAsync(id, statement.Table, where.Key)
+                : await GetAsync(statement.Table, where.Key);
 
             rows = row is null ? [] : [row];
         }
         else if (transactionId is Guid id)
         {
-            var result = await _transactions.RangeAsync(id, statement.Table, statement.Start, statement.End, statement.Limit);
+            var result = await _transactions.RangeAsync(id, statement.Table, where.Start, where.End, scanLimit);
             if (!result.FoundTransaction)
             {
                 throw TransactionNotFound();
@@ -141,7 +146,14 @@ public sealed class SqlEngine
         }
         else
         {
-            rows = await RangeAsync(statement.Table, statement.Start, statement.End, statement.Limit);
+            rows = await RangeAsync(statement.Table, where.Start, where.End, scanLimit);
+        }
+
+        if (where.ValuePredicate is not null)
+        {
+            rows = rows
+                .Where(row => MatchesValuePredicate(row.Value, where.ValuePredicate))
+                .ToList();
         }
 
         var projectedRows = rows
@@ -154,6 +166,8 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> UpdateAsync(SqlUpdateStatement statement, Guid? transactionId)
     {
+        EnsureValidJsonValue(statement.Value);
+
         if (transactionId is Guid id)
         {
             if (!_transactions.TryStagePut(id, statement.Table, statement.Key, statement.Value, out _))
@@ -272,6 +286,62 @@ public sealed class SqlEngine
         }
 
         return values;
+    }
+
+    private static void EnsureValidJsonValue(string value)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(value);
+        }
+        catch (JsonException ex)
+        {
+            throw new SqlExecutionException($"value must be valid JSON: {ex.Message}");
+        }
+    }
+
+    private static bool MatchesValuePredicate(string value, SqlValuePredicate predicate)
+    {
+        if (predicate.Path.Count == 0)
+        {
+            return string.Equals(value, predicate.Expected, StringComparison.Ordinal);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            var current = document.RootElement;
+
+            foreach (var property in predicate.Path)
+            {
+                if (current.ValueKind != JsonValueKind.Object
+                    || !current.TryGetProperty(property, out var next))
+                {
+                    return false;
+                }
+
+                current = next;
+            }
+
+            return string.Equals(ToPredicateComparableValue(current), predicate.Expected, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string ToPredicateComparableValue(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => "null",
+            _ => element.GetRawText()
+        };
     }
 
     private static Guid RequireTransactionId(Guid? transactionId, string statementType)
