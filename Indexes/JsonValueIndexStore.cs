@@ -60,7 +60,7 @@ internal sealed class JsonValueIndexStore
             foreach (var definition in definitions)
             {
                 var rows = await readRowsAsync(definition.Table);
-                AddIndex(BuildIndex(definition, rows));
+                AddIndex(BuildIndex(definition, IndexPath(definition.Name), rows, rebuild: false));
             }
 
             await WriteCatalogAsync(Definitions(), cancellationToken);
@@ -138,7 +138,7 @@ internal sealed class JsonValueIndexStore
                 return false;
             }
 
-            AddIndex(BuildIndex(definition, rows));
+            AddIndex(BuildIndex(definition, IndexPath(definition.Name), rows, rebuild: true));
             await WriteCatalogAsync(Definitions(), cancellationToken);
             return true;
         }
@@ -236,15 +236,34 @@ internal sealed class JsonValueIndexStore
         tableIndexes.Add(index);
     }
 
-    private static JsonValueIndex BuildIndex(JsonValueIndexDefinition definition, IReadOnlyList<KeyValueRow> rows)
+    private JsonValueIndex BuildIndex(
+        JsonValueIndexDefinition definition,
+        string indexPath,
+        IReadOnlyList<KeyValueRow> rows,
+        bool rebuild)
     {
-        var index = new JsonValueIndex(definition);
-        foreach (var row in rows)
+        var existingTree = DiskBackedBPlusTree.Exists(indexPath);
+        var tree = !rebuild && existingTree
+            ? DiskBackedBPlusTree.Open(indexPath)
+            : DiskBackedBPlusTree.CreateNew(indexPath);
+
+        if (rebuild || !existingTree)
         {
-            index.Replace(row.Key, oldValue: null, row.Value);
+            foreach (var row in rows)
+            {
+                if (JsonValueAccessor.TryReadComparableValue(row.Value, definition.Path, out var indexedValue))
+                {
+                    tree.Insert(indexedValue, row.Key);
+                }
+            }
         }
 
-        return index;
+        return new JsonValueIndex(definition, tree);
+    }
+
+    private string IndexPath(string name)
+    {
+        return Path.Combine(_indexDirectory, IndexNames.Normalize(name));
     }
 
     private IReadOnlyList<JsonValueIndexDefinition> Definitions()
@@ -304,11 +323,12 @@ internal sealed record JsonValueIndexCatalogSnapshot(IReadOnlyList<JsonValueInde
 
 internal sealed class JsonValueIndex
 {
-    private readonly BPlusTree<string, string> _tree = new(comparer: StringComparer.Ordinal);
+    private readonly DiskBackedBPlusTree _tree;
 
-    public JsonValueIndex(JsonValueIndexDefinition definition)
+    public JsonValueIndex(JsonValueIndexDefinition definition, DiskBackedBPlusTree tree)
     {
         Definition = definition;
+        _tree = tree;
     }
 
     public JsonValueIndexDefinition Definition { get; }

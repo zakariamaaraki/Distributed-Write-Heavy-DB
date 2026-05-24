@@ -19,8 +19,8 @@ This project is database backed by a write-optimized key/value store.
   documents or dot-path properties.
 - Enforce valid JSON documents for SQL `INSERT` and `UPDATE` values while
   keeping the lower-level key/value storage string-based.
-- Support B+ tree indexes over JSON `value` documents or dot-path properties
-  for equality searches.
+- Support disk-backed B+ tree indexes over JSON `value` documents or dot-path
+  properties for equality searches.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
@@ -175,11 +175,12 @@ Each index definition targets one table and one JSON path:
 - `value.tier`: indexes a top-level JSON property.
 - `value.profile.city`: indexes a nested JSON property.
 
-At runtime, each index is backed by a B+ tree. Internal nodes contain separator
-keys and child pointers. Leaf nodes contain the indexed JSON value and the row
-keys that currently have that value. Leaf nodes are linked in sorted order, so
-the structure can later support ordered index scans without changing the public
-index API.
+Each index is backed by a disk-persisted B+ tree. Internal pages contain
+separator keys and child page ids. Leaf pages contain sorted `(indexedValue,
+rowKey)` entries. Storing duplicates as separate leaf entries avoids one giant
+in-memory posting list for low-cardinality properties such as `tier`. Leaf pages
+are linked in sorted order, so the structure can later support ordered index
+scans without changing the public index API.
 
 The current SQL planner uses indexes for equality predicates:
 
@@ -200,8 +201,8 @@ GET /indexes/btrees
 GET /indexes/{indexName}/btree
 ```
 
-The dump returns the index metadata plus the B+ tree order, height, recursive
-root node, and linked leaf entries. A trimmed response looks like:
+The dump returns the index metadata plus the B+ tree order, height, page count,
+recursive root page, and linked leaf page entries. A trimmed response looks like:
 
 ```json
 {
@@ -211,7 +212,9 @@ root node, and linked leaf entries. A trimmed response looks like:
   "tree": {
     "order": 32,
     "height": 1,
+    "pageCount": 1,
     "root": {
+      "pageId": 1,
       "kind": "leaf",
       "level": 0,
       "keys": ["gold", "silver"],
@@ -221,17 +224,32 @@ root node, and linked leaf entries. A trimmed response looks like:
         { "key": "silver", "values": ["user:1002"] }
       ]
     },
-    "leaves": []
+    "leaves": [
+      {
+        "pageId": 1,
+        "ordinal": 0,
+        "entries": [
+          { "key": "gold", "values": ["user:1001"] },
+          { "key": "silver", "values": ["user:1002"] }
+        ]
+      }
+    ]
   }
 }
 ```
 
-Index definitions are durable, but index contents are rebuildable:
+Index definitions and index pages are durable:
 
 - Definitions are stored in `data/indexes/catalog.json`.
-- B+ tree contents are rebuilt from committed table data during startup.
+- Each index has `data/indexes/{indexName}/metadata.json`.
+- Each index stores B+ tree pages under `data/indexes/{indexName}/pages/`.
+- Startup opens existing B+ tree metadata and pages instead of rebuilding the
+  whole index.
+- If a catalog definition exists but page metadata is missing, the index is
+  rebuilt from committed table data.
 - The LSM table remains the source of truth for actual rows.
-- No separate index WAL is written for the first version.
+- There is not yet a separate index WAL; page writes are persisted after the
+  committed table write succeeds.
 
 Indexes are maintained after committed writes succeed:
 
@@ -249,15 +267,17 @@ to `null`. Objects and arrays compare by their raw JSON text.
 
 The index module is deliberately small and modular:
 
-- `BPlusTree`: generic in-memory B+ tree used by indexes.
+- `DiskBackedBPlusTree`: page-based B+ tree persisted under an index directory.
 - `JsonValueAccessor`: extracts comparable values from JSON documents.
-- `JsonValueIndexStore`: stores index definitions, rebuilds indexes at startup,
-  updates indexes on writes, and serves indexed equality lookups.
+- `JsonValueIndexStore`: stores index definitions, opens or creates disk-backed
+  trees, updates indexes on writes, and serves indexed equality lookups.
 
 Current limitations:
 
 - Indexes accelerate equality predicates only.
-- Index contents are in memory and rebuilt on startup from table data.
+- Index pages are JSON files rather than fixed-size binary database pages.
+- There is no index WAL yet, so a crash between table commit and index page
+  update can require rebuilding the affected index from table data.
 - There is no cost-based optimizer; SQL uses an index only when the predicate
   path exactly matches an index definition.
 - Transactional reads do not use committed indexes because staged writes must be
@@ -638,6 +658,10 @@ Runtime data lives under `data/`:
 
 - `data/catalog.json`: table catalog.
 - `data/indexes/catalog.json`: SQL JSON value index definitions.
+- `data/indexes/{index}/metadata.json`: one JSON value index B+ tree root page,
+  next page id, and order.
+- `data/indexes/{index}/pages/page-*.json`: disk-backed B+ tree pages for that
+  index.
 - `data/changelog.log`: committed change-log events for replayable subscriptions.
 - `data/raft-state.json`: persisted Raft term and vote.
 - `data/raft-replication.json`: last leader change sequence applied by a

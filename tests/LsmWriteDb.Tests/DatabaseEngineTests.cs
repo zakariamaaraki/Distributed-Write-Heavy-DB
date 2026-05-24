@@ -160,6 +160,8 @@ public sealed class DatabaseEngineTests
             var platinumAfterRestart = await restored.TrySearchJsonValueIndexAsync("users", ["tier"], "platinum");
 
             Assert.True(created);
+            Assert.True(File.Exists(Path.Combine(dataPath, "indexes", "idx_users_tier", "metadata.json")));
+            Assert.True(Directory.GetFiles(Path.Combine(dataPath, "indexes", "idx_users_tier", "pages"), "page-*.json").Length > 0);
             var index = Assert.Single(indexes);
             Assert.Equal("idx_users_tier", index.Name);
             Assert.Equal("users", index.Table);
