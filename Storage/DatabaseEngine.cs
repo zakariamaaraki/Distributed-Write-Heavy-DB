@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using LsmWriteDb.ChangeLogs;
+using LsmWriteDb.Indexes;
 
 namespace LsmWriteDb.Storage;
 
@@ -89,6 +90,7 @@ public sealed class DatabaseEngine
     private readonly ChangeLogService _changeLog;
     private readonly DatabaseSequenceGenerator _sequenceGenerator = new();
     private readonly ConcurrentDictionary<string, LsmStore> _stores = new(StringComparer.Ordinal);
+    private readonly JsonValueIndexStore _indexes;
     private readonly SemaphoreSlim _catalogMutex = new(1, 1);
     private readonly string _tablesPath;
     private readonly string _catalogPath;
@@ -101,6 +103,7 @@ public sealed class DatabaseEngine
         _changeLog = changeLog;
         _tablesPath = Path.Combine(options.DataPath, "tables");
         _catalogPath = Path.Combine(options.DataPath, "catalog.json");
+        _indexes = new JsonValueIndexStore(options.DataPath);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -131,6 +134,11 @@ public sealed class DatabaseEngine
             }
 
             await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
+            await _indexes.InitializeAsync(
+                _stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(),
+                ScanTableRowsForIndexAsync,
+                cancellationToken);
+
             _initialized = true;
         }
         finally
@@ -173,16 +181,68 @@ public sealed class DatabaseEngine
         }
     }
 
+    public async Task<IReadOnlyList<JsonValueIndexInfo>> ListIndexesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return await _indexes.ListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<JsonValueIndexTreeDump>> DumpIndexTreesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return await _indexes.DumpTreesAsync(cancellationToken);
+    }
+
+    public async Task<JsonValueIndexTreeDump?> DumpIndexTreeAsync(string name, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return await _indexes.DumpTreeAsync(name, cancellationToken);
+    }
+
+    public async Task<bool> CreateJsonValueIndexAsync(
+        string table,
+        string name,
+        IReadOnlyList<string> path,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedTable = TableNames.Normalize(table);
+        var definition = new JsonValueIndexDefinition(
+            IndexNames.Normalize(name),
+            normalizedTable,
+            path.Select(IndexNames.ValidatePathPart).ToList());
+
+        await EnsureInitializedAsync(cancellationToken);
+        var store = await GetStoreAsync(normalizedTable);
+        var rows = await store.ScanAsync();
+
+        return await _indexes.CreateAsync(definition, rows, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>?> TrySearchJsonValueIndexAsync(
+        string table,
+        IReadOnlyList<string> path,
+        string expected,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedTable = TableNames.Normalize(table);
+        await GetStoreAsync(normalizedTable);
+        return await _indexes.TrySearchAsync(normalizedTable, path, expected, cancellationToken);
+    }
+
     public async Task PutAsync(string table, string key, string value)
     {
         var store = await GetStoreAsync(table);
+        var oldRow = await store.GetAsync(key);
         await store.PutAsync(key, value);
+        await _indexes.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
     }
 
     public async Task DeleteAsync(string table, string key)
     {
         var store = await GetStoreAsync(table);
+        var oldRow = await store.GetAsync(key);
         await store.DeleteAsync(key);
+        await _indexes.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
     }
 
     public async Task<KeyValueRow?> GetAsync(string table, string key)
@@ -209,7 +269,26 @@ public sealed class DatabaseEngine
         foreach (var group in operations.GroupBy(operation => TableNames.Normalize(operation.Table)))
         {
             var store = await GetStoreAsync(group.Key);
-            await store.ApplyBatchAsync(group.ToList());
+            var groupOperations = group.ToList();
+            var oldRowsByKey = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var operation in groupOperations)
+            {
+                oldRowsByKey[operation.Key] = (await store.GetAsync(operation.Key))?.Value;
+            }
+
+            await store.ApplyBatchAsync(groupOperations);
+
+            foreach (var operation in groupOperations)
+            {
+                if (operation.IsDeleted)
+                {
+                    await _indexes.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
+                }
+                else
+                {
+                    await _indexes.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
+                }
+            }
         }
     }
 
@@ -224,7 +303,17 @@ public sealed class DatabaseEngine
         }
 
         var store = await GetStoreAsync(table);
+        var oldRow = await store.GetAsync(entry.Key);
         await store.ApplyReplicatedChangeAsync(entry);
+
+        if (entry.IsDeleted)
+        {
+            await _indexes.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
+        }
+        else
+        {
+            await _indexes.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
+        }
     }
 
     public async Task<DatabaseStats> GetStatsAsync()
@@ -265,6 +354,16 @@ public sealed class DatabaseEngine
         }
 
         throw new TableNotFoundException(normalized);
+    }
+
+    private async Task<IReadOnlyList<KeyValueRow>> ScanTableRowsForIndexAsync(string table)
+    {
+        if (_stores.TryGetValue(TableNames.Normalize(table), out var store))
+        {
+            return await store.ScanAsync();
+        }
+
+        throw new TableNotFoundException(table);
     }
 
     private LsmStore GetOrCreateStoreCore(string table)

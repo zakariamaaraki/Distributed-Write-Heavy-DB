@@ -39,6 +39,11 @@ internal sealed record SqlRollbackStatement() : SqlStatement("ROLLBACK");
 
 internal sealed record SqlCreateTableStatement(string Table) : SqlStatement("CREATE TABLE");
 
+internal sealed record SqlCreateIndexStatement(
+    string Table,
+    string Name,
+    IReadOnlyList<string> Path) : SqlStatement("CREATE INDEX");
+
 internal sealed record SqlInsertStatement(string Table, string Key, string Value) : SqlStatement("INSERT");
 
 internal sealed record SqlSelectStatement(

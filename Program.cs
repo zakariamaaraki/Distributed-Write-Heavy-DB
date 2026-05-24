@@ -1,4 +1,5 @@
 using LsmWriteDb.ChangeLogs;
+using LsmWriteDb.Indexes;
 using LsmWriteDb.Raft;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Sql;
@@ -39,6 +40,7 @@ app.MapGet("/", () => Results.Ok(new { name = "Simple LSM Write Database" }));
 
 app.MapTableEndpoints();
 app.MapTransactionEndpoints();
+app.MapIndexEndpoints();
 app.MapSqlEndpoints();
 app.MapSqlConsoleEndpoints();
 app.MapChangeLogEndpoints();

@@ -131,6 +131,58 @@ public sealed class DatabaseEngineTests
         }
     }
 
+    [Fact]
+    public async Task JsonValueIndexes_AreBuiltUpdatedAndRebuiltOnStartup()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var database = await CreateDatabaseAsync(dataPath);
+            await database.CreateTableAsync("users");
+            await database.PutAsync("users", "user:1", "{\"name\":\"Ada\",\"tier\":\"gold\"}");
+            await database.PutAsync("users", "user:2", "{\"name\":\"Grace\",\"tier\":\"silver\"}");
+            await database.PutAsync("users", "user:3", "{\"name\":\"Linus\",\"tier\":\"gold\"}");
+
+            var created = await database.CreateJsonValueIndexAsync("users", "idx_users_tier", ["tier"]);
+            var goldBeforeUpdate = await database.TrySearchJsonValueIndexAsync("users", ["tier"], "gold");
+
+            await database.PutAsync("users", "user:1", "{\"name\":\"Ada\",\"tier\":\"platinum\"}");
+            await database.DeleteAsync("users", "user:3");
+
+            var indexes = await database.ListIndexesAsync();
+            var treeDumps = await database.DumpIndexTreesAsync();
+            var treeDumpByName = await database.DumpIndexTreeAsync("idx_users_tier");
+            var goldAfterUpdate = await database.TrySearchJsonValueIndexAsync("users", ["tier"], "gold");
+            var platinumAfterUpdate = await database.TrySearchJsonValueIndexAsync("users", ["tier"], "platinum");
+
+            var restored = await CreateDatabaseAsync(dataPath);
+            var platinumAfterRestart = await restored.TrySearchJsonValueIndexAsync("users", ["tier"], "platinum");
+
+            Assert.True(created);
+            var index = Assert.Single(indexes);
+            Assert.Equal("idx_users_tier", index.Name);
+            Assert.Equal("users", index.Table);
+            Assert.Equal(["tier"], index.Path);
+            var treeDump = Assert.Single(treeDumps);
+            Assert.NotNull(treeDumpByName);
+            Assert.Equal("idx_users_tier", treeDump.Name);
+            Assert.Equal(treeDump.Name, treeDumpByName.Name);
+            Assert.Equal("users", treeDump.Table);
+            Assert.Equal(["tier"], treeDump.Path);
+            Assert.Contains(treeDump.Tree.Leaves.SelectMany(leaf => leaf.Entries), entry =>
+                entry.Key == "platinum" && entry.Values.SequenceEqual(["user:1"]));
+            Assert.Equal(["user:1", "user:3"], goldBeforeUpdate);
+            Assert.Empty(goldAfterUpdate!);
+            Assert.Equal(["user:1"], platinumAfterUpdate);
+            Assert.Equal(["user:1"], platinumAfterRestart);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
     private static async Task<DatabaseEngine> CreateDatabaseAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);

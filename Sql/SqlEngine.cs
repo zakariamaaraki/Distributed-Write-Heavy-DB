@@ -1,8 +1,8 @@
 using LsmWriteDb.Storage;
 using LsmWriteDb.Raft;
 using LsmWriteDb.Transactions;
+using LsmWriteDb.Indexes;
 using Microsoft.AspNetCore.Http;
-using System.Text.Json;
 
 namespace LsmWriteDb.Sql;
 
@@ -56,6 +56,7 @@ public sealed class SqlEngine
             SqlCommitStatement => await CommitAsync(request.TransactionId),
             SqlRollbackStatement => Rollback(request.TransactionId),
             SqlCreateTableStatement create => await CreateTableAsync(create),
+            SqlCreateIndexStatement createIndex => await CreateIndexAsync(createIndex),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
             SqlSelectStatement select => await SelectAsync(select, request.TransactionId),
             SqlUpdateStatement update => await UpdateAsync(update, request.TransactionId),
@@ -125,8 +126,15 @@ public sealed class SqlEngine
         IReadOnlyList<KeyValueRow> rows;
         var where = statement.Where;
         var scanLimit = where.ValuePredicate is null ? statement.Limit : 1_000;
+        var indexedRows = transactionId is null && where.Key is null && where.ValuePredicate is not null
+            ? await TrySelectRowsWithIndexAsync(statement.Table, where, statement.Limit)
+            : null;
 
-        if (where.Key is not null)
+        if (indexedRows is not null)
+        {
+            rows = indexedRows;
+        }
+        else if (where.Key is not null)
         {
             var row = transactionId is Guid id
                 ? await GetTransactionRowAsync(id, statement.Table, where.Key)
@@ -198,6 +206,20 @@ public sealed class SqlEngine
         }
 
         return SqlExecutionResult.Acknowledged("DELETE", rowsAffected: 1, transactionId);
+    }
+
+    private async Task<SqlExecutionResult> CreateIndexAsync(SqlCreateIndexStatement statement)
+    {
+        if (_database is null)
+        {
+            throw new SqlExecutionException("CREATE INDEX requires the multi-table database engine.");
+        }
+
+        var created = await _database.CreateJsonValueIndexAsync(statement.Table, statement.Name, statement.Path);
+        return SqlExecutionResult.Acknowledged(
+            "CREATE INDEX",
+            rowsAffected: created ? 1 : 0,
+            message: created ? "index created" : "index already exists");
     }
 
     private async Task<SqlExecutionResult> CreateTableAsync(SqlCreateTableStatement statement)
@@ -272,6 +294,50 @@ public sealed class SqlEngine
         return await _singleStore!.RangeAsync(start, end, limit);
     }
 
+    private async Task<IReadOnlyList<KeyValueRow>?> TrySelectRowsWithIndexAsync(
+        string table,
+        SqlWhereClause where,
+        int limit)
+    {
+        if (_database is null || where.ValuePredicate is null)
+        {
+            return null;
+        }
+
+        var keys = await _database.TrySearchJsonValueIndexAsync(
+            table,
+            where.ValuePredicate.Path,
+            where.ValuePredicate.Expected);
+        if (keys is null)
+        {
+            return null;
+        }
+
+        var boundedLimit = Math.Clamp(limit, 1, 1_000);
+        var rows = new List<KeyValueRow>();
+        foreach (var key in keys)
+        {
+            if (!IsInsideRange(key, where.Start, where.End))
+            {
+                continue;
+            }
+
+            var row = await _database.GetAsync(table, key);
+            if (row is null || !MatchesValuePredicate(row.Value, where.ValuePredicate))
+            {
+                continue;
+            }
+
+            rows.Add(row);
+            if (rows.Count == boundedLimit)
+            {
+                break;
+            }
+        }
+
+        return rows;
+    }
+
     private static IReadOnlyDictionary<string, string> Project(KeyValueRow row, IReadOnlyList<string> columns)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -290,58 +356,31 @@ public sealed class SqlEngine
 
     private static void EnsureValidJsonValue(string value)
     {
-        try
+        if (!JsonValueAccessor.IsValidJson(value, out var error))
         {
-            using var _ = JsonDocument.Parse(value);
-        }
-        catch (JsonException ex)
-        {
-            throw new SqlExecutionException($"value must be valid JSON: {ex.Message}");
+            throw new SqlExecutionException($"value must be valid JSON: {error}");
         }
     }
 
     private static bool MatchesValuePredicate(string value, SqlValuePredicate predicate)
     {
-        if (predicate.Path.Count == 0)
-        {
-            return string.Equals(value, predicate.Expected, StringComparison.Ordinal);
-        }
+        return JsonValueAccessor.TryReadComparableValue(value, predicate.Path, out var actual)
+            && string.Equals(actual, predicate.Expected, StringComparison.Ordinal);
+    }
 
-        try
-        {
-            using var document = JsonDocument.Parse(value);
-            var current = document.RootElement;
-
-            foreach (var property in predicate.Path)
-            {
-                if (current.ValueKind != JsonValueKind.Object
-                    || !current.TryGetProperty(property, out var next))
-                {
-                    return false;
-                }
-
-                current = next;
-            }
-
-            return string.Equals(ToPredicateComparableValue(current), predicate.Expected, StringComparison.Ordinal);
-        }
-        catch (JsonException)
+    private static bool IsInsideRange(string key, string? start, string? end)
+    {
+        if (start is not null && string.CompareOrdinal(key, start) < 0)
         {
             return false;
         }
-    }
 
-    private static string ToPredicateComparableValue(JsonElement element)
-    {
-        return element.ValueKind switch
+        if (end is not null && string.CompareOrdinal(key, end) > 0)
         {
-            JsonValueKind.String => element.GetString() ?? string.Empty,
-            JsonValueKind.Number => element.GetRawText(),
-            JsonValueKind.True => "true",
-            JsonValueKind.False => "false",
-            JsonValueKind.Null => "null",
-            _ => element.GetRawText()
-        };
+            return false;
+        }
+
+        return true;
     }
 
     private static Guid RequireTransactionId(Guid? transactionId, string statementType)

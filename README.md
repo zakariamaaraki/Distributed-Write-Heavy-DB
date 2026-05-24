@@ -19,6 +19,8 @@ This project is database backed by a write-optimized key/value store.
   documents or dot-path properties.
 - Enforce valid JSON documents for SQL `INSERT` and `UPDATE` values while
   keeping the lower-level key/value storage string-based.
+- Support B+ tree indexes over JSON `value` documents or dot-path properties
+  for equality searches.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
@@ -29,7 +31,7 @@ This project is database backed by a write-optimized key/value store.
 
 ## High-Level Architecture
 
-![High-level architecture of the distributed LSM database](docs/high-level-architecture.svg)
+![High-level architecture of the distributed LSM database](/docs/high-level-architecture.svg)
 
 ## Data Model
 
@@ -90,6 +92,7 @@ Supported statements:
 
 - `CREATE TABLE users`
 - `CREATE TABLE IF NOT EXISTS users`
+- `CREATE INDEX idx_users_tier ON users (value.tier)`
 - `BEGIN` or `BEGIN TRANSACTION`
 - `COMMIT` or `COMMIT TRANSACTION`
 - `ROLLBACK` or `ROLLBACK TRANSACTION`
@@ -143,13 +146,122 @@ booleans, and null compare to their JSON text such as `'42'`, `'true'`, and
 `'null'`.
 
 Value filters are evaluated by scanning the selected key range, so queries
-should include key bounds when possible. There are no secondary indexes for JSON
-properties.
+should include key bounds when possible unless a matching JSON value index
+exists. Create a B+ tree index with `CREATE INDEX index_name ON table_name
+(value.path)`; future SQL writes keep that index current, and startup rebuilds
+it from committed table data.
 
 This is not a full relational SQL database. Tables do not define custom columns
-yet, and there are no joins, secondary indexes, or arbitrary predicates; SQL is
-currently another way to call the existing table/key/value operations with
-bounded key scans for JSON property filters.
+yet, and there are no joins or arbitrary predicates; SQL is currently another
+way to call the existing table/key/value operations with optional B+ tree
+indexes for JSON value equality filters.
+
+### B+ Trees and JSON Value Indexes
+
+JSON value indexes live under `Indexes/` and are intentionally separate from the
+LSM tree implementation. The storage engine remains a key/value LSM tree; the
+index module is an auxiliary lookup structure used by SQL when a query filters
+on the full JSON `value` document or a JSON property path.
+
+Create an index with:
+
+```sql
+CREATE INDEX idx_users_tier ON users (value.tier)
+```
+
+Each index definition targets one table and one JSON path:
+
+- `value`: indexes the full JSON document text.
+- `value.tier`: indexes a top-level JSON property.
+- `value.profile.city`: indexes a nested JSON property.
+
+At runtime, each index is backed by a B+ tree. Internal nodes contain separator
+keys and child pointers. Leaf nodes contain the indexed JSON value and the row
+keys that currently have that value. Leaf nodes are linked in sorted order, so
+the structure can later support ordered index scans without changing the public
+index API.
+
+The current SQL planner uses indexes for equality predicates:
+
+```sql
+SELECT key, value FROM users WHERE value.tier = 'gold'
+```
+
+If a matching index exists, the SQL engine asks the B+ tree for candidate row
+keys, reads those rows from the table by key, and rechecks the JSON predicate
+before applying projection and `LIMIT`. The recheck keeps the LSM table as the
+authority even if an index has stale candidates during a future implementation
+change. If no matching index exists, SQL falls back to the bounded key scan path.
+
+Dump index structures with:
+
+```text
+GET /indexes/btrees
+GET /indexes/{indexName}/btree
+```
+
+The dump returns the index metadata plus the B+ tree order, height, recursive
+root node, and linked leaf entries. A trimmed response looks like:
+
+```json
+{
+  "name": "idx_users_tier",
+  "table": "users",
+  "path": ["tier"],
+  "tree": {
+    "order": 32,
+    "height": 1,
+    "root": {
+      "kind": "leaf",
+      "level": 0,
+      "keys": ["gold", "silver"],
+      "children": [],
+      "entries": [
+        { "key": "gold", "values": ["user:1001"] },
+        { "key": "silver", "values": ["user:1002"] }
+      ]
+    },
+    "leaves": []
+  }
+}
+```
+
+Index definitions are durable, but index contents are rebuildable:
+
+- Definitions are stored in `data/indexes/catalog.json`.
+- B+ tree contents are rebuilt from committed table data during startup.
+- The LSM table remains the source of truth for actual rows.
+- No separate index WAL is written for the first version.
+
+Indexes are maintained after committed writes succeed:
+
+- Direct database puts replace the old indexed value with the new one.
+- Deletes remove the old row key from matching indexes.
+- SQL `INSERT` and `UPDATE` go through the same database write path.
+- Transaction commits update indexes after the committed batch is applied.
+- Replicated changes update indexes after the follower applies the leader's
+  change to the local table.
+
+JSON values are normalized for comparison the same way SQL predicates compare
+them. String properties compare to their string value. Numbers compare to their
+JSON number text. Booleans compare to `true` or `false`, and JSON null compares
+to `null`. Objects and arrays compare by their raw JSON text.
+
+The index module is deliberately small and modular:
+
+- `BPlusTree`: generic in-memory B+ tree used by indexes.
+- `JsonValueAccessor`: extracts comparable values from JSON documents.
+- `JsonValueIndexStore`: stores index definitions, rebuilds indexes at startup,
+  updates indexes on writes, and serves indexed equality lookups.
+
+Current limitations:
+
+- Indexes accelerate equality predicates only.
+- Index contents are in memory and rebuilt on startup from table data.
+- There is no cost-based optimizer; SQL uses an index only when the predicate
+  path exactly matches an index definition.
+- Transactional reads do not use committed indexes because staged writes must be
+  overlaid first.
 
 ## HTTP API
 
@@ -183,7 +295,10 @@ bounded key scans for JSON property filters.
   range read a table with staged transaction changes overlaid on committed data.
 - `POST /transactions/{transactionId}/commit`: commit staged writes.
 - `DELETE /transactions/{transactionId}`: rollback and discard staged writes.
-- `POST /sql`: execute a SQL statement against the table/key/value model.
+- `GET /indexes`: list current SQL JSON value indexes.
+- `GET /indexes/btrees`: dump all current JSON value index B+ trees.
+- `GET /indexes/{name}/btree`: dump one JSON value index B+ tree.
+- `POST /sql`: execute a SQL statement against the table/key/value/index model.
 - `GET /sql-console`: open the embedded browser SQL console.
 - `GET /changes?fromSequence=0&limit=100`: replay committed change-log events.
 - `GET /changes/stream?fromSequence=0`: stream committed changes as
@@ -256,11 +371,11 @@ from the storage engine.
 
 Leader election:
 
-![Raft leader election](docs/raft-leader-election.gif)
+![Raft leader election](/docs/raft-leader-election.gif)
 
 Change-log subscription:
 
-![Raft change-log watch](docs/raft-change-log-watch.gif)
+![Raft change-log watch](/docs/raft-change-log-watch.gif)
 
 Each node has a role:
 
@@ -364,7 +479,7 @@ frontend build step. The page posts queries to `/sql`, renders returned rows as 
 table, stores recent queries in browser local storage, and keeps the active
 transaction id in the console input.
 
-![SQL console screenshot](docs/sql-console.png)
+![SQL console screenshot](/docs/sql-console.png)
 
 The console has direct controls for `BEGIN`, `COMMIT`, and `ROLLBACK`. When
 `BEGIN` returns a transaction id, the console stores it and sends it with later
@@ -379,7 +494,7 @@ watching committed change-log events. Enter the last processed sequence, connect
 to the stream, and the page shows replayed and live events in a table. It uses
 `/changes/stream` for live updates and `/changes` for one-time replay.
 
-![Change log console screenshot](docs/change-log-console.png)
+![Change log console screenshot](/docs/change-log-console.png)
 
 ### Ordered MemTable
 
@@ -522,6 +637,7 @@ SSTable plus that table's active memtable.
 Runtime data lives under `data/`:
 
 - `data/catalog.json`: table catalog.
+- `data/indexes/catalog.json`: SQL JSON value index definitions.
 - `data/changelog.log`: committed change-log events for replayable subscriptions.
 - `data/raft-state.json`: persisted Raft term and vote.
 - `data/raft-replication.json`: last leader change sequence applied by a
@@ -587,8 +703,9 @@ network. Use `/raft/state` on each host port to see which node is leader.
 
 ## Non-Goals
 
-- No full relational SQL layer with schemas, joins, secondary indexes, or
-  arbitrary predicates beyond key filters and JSON value equality filters.
+- No full relational SQL layer with schemas, joins, general-purpose secondary
+  indexes, or arbitrary predicates beyond key filters and JSON value equality
+  filters.
 - No dynamic Raft membership changes.
 - No full Raft log replication; followers replicate committed storage changes
   from the leader's durable change log after leader election.

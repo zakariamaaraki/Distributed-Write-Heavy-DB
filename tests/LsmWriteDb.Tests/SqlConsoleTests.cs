@@ -16,5 +16,7 @@ public sealed class SqlConsoleTests
         Assert.Contains("fetch('/sql'", script);
         Assert.Contains("id=\"transactionId\"", html);
         Assert.Contains("/changes-console", html);
+        Assert.Contains("CREATE INDEX idx_users_tier ON users (value.tier)", html);
+        Assert.Contains("SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50", html);
     }
 }

@@ -294,6 +294,54 @@ public sealed class SqlEngineTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CreatesIndexForJsonValuePropertySearches()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath, flushThreshold: 2_000);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+
+            for (var i = 0; i < 1_005; i++)
+            {
+                var key = $"user:{i:0000}";
+                var tier = i == 1_004 ? "gold" : "silver";
+                await engine.ExecuteAsync(new SqlQueryRequest(
+                    $"INSERT INTO users VALUES ('{key}', '{{\"tier\":\"{tier}\"}}')",
+                    null));
+            }
+
+            var createIndex = await engine.ExecuteAsync(new SqlQueryRequest(
+                "CREATE INDEX idx_users_tier ON users (value.tier)",
+                null));
+            var goldUsers = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE value.tier = 'gold' LIMIT 10",
+                null));
+
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "UPDATE users SET value = '{\"tier\":\"platinum\"}' WHERE key = 'user:1004'",
+                null));
+            var goldAfterUpdate = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE value.tier = 'gold' LIMIT 10",
+                null));
+            var platinumAfterUpdate = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT key FROM users WHERE value.tier = 'platinum' LIMIT 10",
+                null));
+
+            Assert.Equal("CREATE INDEX", createIndex.StatementType);
+            Assert.Equal(1, createIndex.RowsAffected);
+            Assert.Equal(["user:1004"], goldUsers.Rows.Select(row => row["key"]));
+            Assert.Empty(goldAfterUpdate.Rows);
+            Assert.Equal(["user:1004"], platinumAfterUpdate.Rows.Select(row => row["key"]));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RejectsSqlWritesWithInvalidJsonValues()
     {
         var dataPath = CreateTempDataPath();

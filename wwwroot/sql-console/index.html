@@ -31,8 +31,12 @@
         <div class="query-list">
           <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
           <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;,&quot;tier&quot;:&quot;gold&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')</button>
-          <button class="snippet" data-query="SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50">SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50</button>
+          <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1002', '{&quot;name&quot;:&quot;Grace&quot;,&quot;tier&quot;:&quot;silver&quot;}')">INSERT INTO users (key, value) VALUES ('user:1002', '{"name":"Grace","tier":"silver"}')</button>
+          <button class="snippet" data-query="CREATE INDEX idx_users_tier ON users (value.tier)">CREATE INDEX idx_users_tier ON users (value.tier)</button>
           <button class="snippet" data-query="SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50">SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50</button>
+          <button class="snippet" data-query="CREATE INDEX idx_users_name ON users (value.name)">CREATE INDEX idx_users_name ON users (value.name)</button>
+          <button class="snippet" data-query="SELECT key, value FROM users WHERE value.name = 'Ada' LIMIT 50">SELECT key, value FROM users WHERE value.name = 'Ada' LIMIT 50</button>
+          <button class="snippet" data-query="SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50">SELECT key, value FROM users WHERE key BETWEEN 'user:1000' AND 'user:1999' LIMIT 50</button>
           <button class="snippet" data-query="SELECT * FROM kv WHERE key = 'alpha'">SELECT * FROM kv WHERE key = 'alpha'</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100">SELECT key, value FROM kv WHERE key BETWEEN 'a' AND 'z' LIMIT 100</button>
           <button class="snippet" data-query="SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50">SELECT key, value FROM kv WHERE key >= 'user:1000' AND key <= 'user:1999' LIMIT 50</button>

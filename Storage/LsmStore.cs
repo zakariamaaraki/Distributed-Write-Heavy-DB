@@ -320,6 +320,39 @@ public sealed class LsmStore
         }
     }
 
+    public async Task<IReadOnlyList<KeyValueRow>> ScanAsync()
+    {
+        await _mutex.WaitAsync();
+        try
+        {
+            EnsureInitialized();
+
+            var latestByKey = new SortedDictionary<string, StoredRecord>(StringComparer.Ordinal);
+
+            foreach (var record in _memTable.Range(start: null, end: null))
+            {
+                KeepNewest(latestByKey, record);
+            }
+
+            foreach (var file in _sstables.GetDataFilesNewestFirst())
+            {
+                foreach (var record in await _sstables.ReadTableAsync(file))
+                {
+                    KeepNewest(latestByKey, record);
+                }
+            }
+
+            return latestByKey.Values
+                .Where(record => !record.IsDeleted)
+                .Select(record => new KeyValueRow(record.Key, record.Value ?? string.Empty))
+                .ToList();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task<StoreStats> GetStatsAsync()
     {
         await _mutex.WaitAsync();

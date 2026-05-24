@@ -67,9 +67,23 @@ internal sealed class SqlParser
         throw Error("Expected BEGIN, COMMIT, ROLLBACK, CREATE, INSERT, SELECT, UPDATE, or DELETE.");
     }
 
-    private SqlCreateTableStatement ParseCreate()
+    private SqlStatement ParseCreate()
     {
-        ExpectKeyword("TABLE");
+        if (MatchKeyword("TABLE"))
+        {
+            return ParseCreateTable();
+        }
+
+        if (MatchKeyword("INDEX"))
+        {
+            return ParseCreateIndex();
+        }
+
+        throw Error("Expected TABLE or INDEX.");
+    }
+
+    private SqlCreateTableStatement ParseCreateTable()
+    {
         if (MatchKeyword("IF"))
         {
             ExpectKeyword("NOT");
@@ -77,6 +91,34 @@ internal sealed class SqlParser
         }
 
         return new SqlCreateTableStatement(ExpectTableName());
+    }
+
+    private SqlCreateIndexStatement ParseCreateIndex()
+    {
+        if (MatchKeyword("IF"))
+        {
+            ExpectKeyword("NOT");
+            ExpectKeyword("EXISTS");
+        }
+
+        var name = ExpectIndexName();
+        ExpectKeyword("ON");
+        var table = ExpectTableName();
+        ExpectSymbol("(");
+        ExpectIdentifier("value");
+
+        var path = new List<string>();
+        if (MatchSymbol("."))
+        {
+            path.Add(ExpectIdentifier());
+            while (MatchSymbol("."))
+            {
+                path.Add(ExpectIdentifier());
+            }
+        }
+
+        ExpectSymbol(")");
+        return new SqlCreateIndexStatement(table, name, path);
     }
 
     private SqlInsertStatement ParseInsert()
@@ -336,6 +378,11 @@ internal sealed class SqlParser
     }
 
     private string ExpectTableName()
+    {
+        return ExpectIdentifier().ToLowerInvariant();
+    }
+
+    private string ExpectIndexName()
     {
         return ExpectIdentifier().ToLowerInvariant();
     }
