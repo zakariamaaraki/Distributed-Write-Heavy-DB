@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
   <title id="title">High-level architecture of the distributed LSM write-heavy database</title>
-  <desc id="desc">A clean overview of clients, one Raft leader, follower read replicas, change-log watches, and the leader local LSM write path with WAL, memtable, change log, SSTables, Bloom filters, flush, and compaction.</desc>
+  <desc id="desc">A clean overview of clients, one Raft leader, follower read replicas, change-log watches, the leader local LSM write path, and disk-backed B+ tree JSON value indexes.</desc>
 
   <defs>
     <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
@@ -40,7 +40,7 @@
   <rect class="page" x="0" y="0" width="1600" height="980"/>
   <rect class="header" x="0" y="0" width="1600" height="86"/>
   <text class="title" x="800" y="55" text-anchor="middle">High-Level Architecture</text>
-  <text class="subtitle" x="800" y="118" text-anchor="middle">Distributed write-heavy key/value database: one write leader, follower read replicas, multiple table-local LSM trees, and one replayable change log.</text>
+  <text class="subtitle" x="800" y="118" text-anchor="middle">Distributed write-heavy key/value database: one write leader, follower read replicas, table-local LSM trees, JSON value indexes, and one replayable change log.</text>
 
   <!-- Cluster routing lane -->
   <rect class="band" x="60" y="150" width="1480" height="350" rx="18"/>
@@ -56,12 +56,14 @@
   <text class="heading" x="710" y="256" text-anchor="middle">Node A - Leader</text>
   <text class="small" x="710" y="290" text-anchor="middle">only node that accepts writes</text>
   <text class="small" x="710" y="318" text-anchor="middle">serves reads and publishes change log</text>
-  <rect class="box" x="545" y="345" width="110" height="38" rx="8"/>
-  <text class="tiny" x="600" y="369" text-anchor="middle">/kv</text>
-  <rect class="box" x="675" y="345" width="110" height="38" rx="8"/>
-  <text class="tiny" x="730" y="369" text-anchor="middle">/sql</text>
-  <rect class="box" x="805" y="345" width="80" height="38" rx="8"/>
-  <text class="tiny" x="845" y="369" text-anchor="middle">/tx</text>
+  <rect class="box" x="525" y="345" width="80" height="38" rx="8"/>
+  <text class="tiny" x="565" y="369" text-anchor="middle">/kv</text>
+  <rect class="box" x="620" y="345" width="80" height="38" rx="8"/>
+  <text class="tiny" x="660" y="369" text-anchor="middle">/sql</text>
+  <rect class="box" x="715" y="345" width="80" height="38" rx="8"/>
+  <text class="tiny" x="755" y="369" text-anchor="middle">/tx</text>
+  <rect class="box" x="810" y="345" width="90" height="38" rx="8"/>
+  <text class="tiny" x="855" y="369" text-anchor="middle">/indexes</text>
 
   <rect class="follower" x="1050" y="205" width="410" height="220" rx="14"/>
   <text class="heading" x="1255" y="246" text-anchor="middle">Follower Read Replicas</text>
@@ -126,6 +128,11 @@
   <text class="label" x="832.5" y="822" text-anchor="middle">Flush</text>
   <text class="small" x="832.5" y="850" text-anchor="middle">size threshold</text>
 
+  <rect class="box" x="530" y="790" width="175" height="80" rx="12"/>
+  <text class="label" x="617.5" y="817" text-anchor="middle">JSON Indexes</text>
+  <text class="small" x="617.5" y="843" text-anchor="middle">disk B+ tree</text>
+  <text class="tiny" x="617.5" y="862" text-anchor="middle">value.property -> keys</text>
+
   <rect class="box" x="960" y="790" width="175" height="80" rx="12"/>
   <text class="label" x="1047.5" y="822" text-anchor="middle">Table SSTables</text>
   <text class="small" x="1047.5" y="850" text-anchor="middle">immutable sorted files</text>
@@ -140,10 +147,12 @@
   <text class="tiny" x="1447.5" y="862" text-anchor="middle">SSTables</text>
 
   <path class="line amber thin" d="M 832.5 740 L 832.5 790" marker-end="url(#arrow-amber)"/>
+  <path class="line green thin" d="M 832.5 740 L 832.5 760 L 617.5 760 L 617.5 790" marker-end="url(#arrow-green)"/>
   <path class="line amber thin" d="M 920 830 L 960 830" marker-end="url(#arrow-amber)"/>
   <path class="line blue thin" d="M 1135 830 L 1175 830" marker-end="url(#arrow-blue)"/>
   <path class="line amber thin" d="M 1350 830 L 1390 830" marker-end="url(#arrow-amber)"/>
 
   <text class="tiny" x="832.5" y="768" text-anchor="middle" fill="#d97706">when memtable is full</text>
+  <text class="tiny" x="617.5" y="766" text-anchor="middle" fill="#16a34a">after committed writes</text>
   <text class="tiny" x="1447.5" y="895" text-anchor="middle" fill="#64748b">compaction runs after every flush</text>
 </svg>
