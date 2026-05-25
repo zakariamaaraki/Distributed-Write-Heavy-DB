@@ -332,6 +332,51 @@ Current limitations:
 - `POST /raft/append-entries`: internal Raft heartbeat RPC used by the leader.
 - `GET /stats`: inspect database and per-table statistics.
 
+## TCP SQL
+
+The service also exposes a long-lived TCP SQL session endpoint, similar to a
+small database wire protocol. It is line-oriented and keeps the transaction id
+inside the connection, so after `BEGIN;` you can keep sending SQL over the same
+socket until `COMMIT;`, `ROLLBACK;`, or disconnect.
+
+Default listener:
+
+```text
+127.0.0.1:6543
+```
+
+Example session:
+
+```text
+CREATE TABLE users;
+INSERT INTO users VALUES ('user:1001', '{"name":"Ada","tier":"gold"}');
+CREATE INDEX idx_users_tier ON users (value.tier);
+SELECT key, value FROM users WHERE value.tier = 'gold';
+QUIT;
+```
+
+Protocol basics:
+
+- The server sends `lsm> ` when it is ready for a statement.
+- End each SQL statement with `;`.
+- Multi-line statements are accepted; the prompt changes to `...> ` until `;`.
+- Successful statements return `OK {json}`.
+- Errors return `ERR "message"`.
+- `QUIT;`, `EXIT;`, or `\q` closes the session.
+
+Configure it with:
+
+```json
+{
+  "TcpSql": {
+    "Enabled": true,
+    "Host": "127.0.0.1",
+    "Port": 6543,
+    "MaxQueryBytes": 65536
+  }
+}
+```
+
 ## Components
 
 ### Write-Ahead Log

@@ -4,6 +4,7 @@ using LsmWriteDb.Raft;
 using LsmWriteDb.Storage;
 using LsmWriteDb.Sql;
 using LsmWriteDb.SqlConsole;
+using LsmWriteDb.TcpSql;
 using LsmWriteDb.Transactions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,8 +27,10 @@ builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpa
 builder.Services.AddSingleton<RaftStateStore>();
 builder.Services.AddSingleton<RaftNode>();
 builder.Services.AddSingleton<RaftRoleGuard>();
+builder.Services.Configure<TcpSqlOptions>(builder.Configuration.GetSection("TcpSql"));
 builder.Services.AddHostedService<RaftElectionService>();
 builder.Services.AddHostedService<RaftChangeLogReplicationService>();
+builder.Services.AddHostedService<TcpSqlServer>();
 
 var app = builder.Build();
 
