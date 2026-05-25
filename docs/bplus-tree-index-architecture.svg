@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Disk-backed B+ tree JSON value index architecture</title>
+  <desc id="desc">Detailed architecture of a SQL JSON value predicate using an index catalog, disk-backed B+ tree metadata, internal pages, linked leaf pages, and LSM table row fetches.</desc>
+
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+    <style>
+      .page { fill: #f8fafc; }
+      .header { fill: #0f172a; }
+      .band { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .query { fill: #eff6ff; stroke: #2563eb; stroke-width: 2.5; }
+      .index { fill: #ecfdf5; stroke: #16a34a; stroke-width: 2.5; }
+      .disk { fill: #fff7ed; stroke: #d97706; stroke-width: 2.5; }
+      .lsm { fill: #f8fafc; stroke: #64748b; stroke-width: 2.5; }
+      .pagebox { fill: #ffffff; stroke: #94a3b8; stroke-width: 2; }
+      .leaf { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+      .internal { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+      .title { font: 700 34px Arial, sans-serif; fill: #ffffff; }
+      .subtitle { font: 500 16px Arial, sans-serif; fill: #334155; }
+      .band-title { font: 700 24px Arial, sans-serif; fill: #0f172a; }
+      .heading { font: 700 21px Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 16px Arial, sans-serif; fill: #1f2937; }
+      .small { font: 500 14px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 12px Arial, sans-serif; fill: #64748b; }
+      .mono { font: 600 13px Consolas, monospace; fill: #1f2937; }
+      .line { fill: none; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { stroke-width: 2.5; }
+      .blue { stroke: #2563eb; }
+      .green { stroke: #16a34a; }
+      .amber { stroke: #d97706; }
+      .gray { stroke: #64748b; }
+      .dash { stroke-dasharray: 8 8; }
+    </style>
+  </defs>
+
+  <rect class="page" x="0" y="0" width="1600" height="1040"/>
+  <rect class="header" x="0" y="0" width="1600" height="86"/>
+  <text class="title" x="800" y="55" text-anchor="middle">Disk-Backed B+ Tree JSON Value Index</text>
+  <text class="subtitle" x="800" y="118" text-anchor="middle">How SELECT ... WHERE value.tier = 'gold' uses persisted B+ tree pages to find row keys, then reads authoritative rows from the LSM table.</text>
+
+  <rect class="band" x="60" y="155" width="1480" height="230" rx="18"/>
+  <text class="band-title" x="100" y="196">Query Planning and Index Selection</text>
+
+  <rect class="query" x="100" y="235" width="325" height="95" rx="12"/>
+  <text class="heading" x="262.5" y="268" text-anchor="middle">SQL Predicate</text>
+  <text class="mono" x="262.5" y="300" text-anchor="middle">WHERE value.tier = 'gold'</text>
+
+  <rect class="index" x="520" y="225" width="300" height="115" rx="12"/>
+  <text class="heading" x="670" y="258" text-anchor="middle">JsonValueIndexStore</text>
+  <text class="small" x="670" y="290" text-anchor="middle">matches table + JSON path</text>
+  <text class="mono" x="670" y="318" text-anchor="middle">users / value.tier</text>
+
+  <rect class="disk" x="915" y="225" width="290" height="115" rx="12"/>
+  <text class="heading" x="1060" y="258" text-anchor="middle">Index Catalog</text>
+  <text class="mono" x="1060" y="290" text-anchor="middle">data/indexes/catalog.json</text>
+  <text class="small" x="1060" y="318" text-anchor="middle">idx_users_tier -> users.tier</text>
+
+  <rect class="disk" x="1290" y="225" width="200" height="115" rx="12"/>
+  <text class="heading" x="1390" y="258" text-anchor="middle">Tree Metadata</text>
+  <text class="mono" x="1390" y="288" text-anchor="middle">metadata.json</text>
+  <text class="tiny" x="1390" y="314" text-anchor="middle">rootPageId, nextPageId, order</text>
+
+  <path class="line blue" d="M 425 282 L 520 282" marker-end="url(#arrow-blue)"/>
+  <path class="line green" d="M 820 282 L 915 282" marker-end="url(#arrow-green)"/>
+  <path class="line amber" d="M 1205 282 L 1290 282" marker-end="url(#arrow-amber)"/>
+
+  <rect class="band" x="60" y="430" width="1480" height="365" rx="18"/>
+  <text class="band-title" x="100" y="472">B+ Tree Page Structure on Disk</text>
+
+  <rect class="internal" x="585" y="505" width="430" height="92" rx="12"/>
+  <text class="heading" x="800" y="536" text-anchor="middle">Internal Page 17</text>
+  <text class="mono" x="800" y="566" text-anchor="middle">keys: gold->user:0480 | silver->user:0000</text>
+  <text class="tiny" x="800" y="588" text-anchor="middle">children: page 8, page 9, page 10</text>
+
+  <rect class="leaf" x="110" y="675" width="360" height="90" rx="12"/>
+  <text class="label" x="290" y="705" text-anchor="middle">Leaf Page 8</text>
+  <text class="mono" x="290" y="732" text-anchor="middle">(bronze, user:0007)</text>
+  <text class="mono" x="290" y="754" text-anchor="middle">(gold, user:0001)</text>
+
+  <rect class="leaf" x="620" y="675" width="360" height="90" rx="12"/>
+  <text class="label" x="800" y="705" text-anchor="middle">Leaf Page 9</text>
+  <text class="mono" x="800" y="732" text-anchor="middle">(gold, user:0480)</text>
+  <text class="mono" x="800" y="754" text-anchor="middle">(gold, user:1001)</text>
+
+  <rect class="leaf" x="1130" y="675" width="360" height="90" rx="12"/>
+  <text class="label" x="1310" y="705" text-anchor="middle">Leaf Page 10</text>
+  <text class="mono" x="1310" y="732" text-anchor="middle">(silver, user:0002)</text>
+  <text class="mono" x="1310" y="754" text-anchor="middle">(silver, user:1310)</text>
+
+  <path class="line blue thin" d="M 705 597 L 340 675" marker-end="url(#arrow-blue)"/>
+  <path class="line blue thin" d="M 800 597 L 800 675" marker-end="url(#arrow-blue)"/>
+  <path class="line blue thin" d="M 895 597 L 1260 675" marker-end="url(#arrow-blue)"/>
+
+  <path class="line green thin" d="M 470 720 L 620 720" marker-end="url(#arrow-green)"/>
+  <path class="line green thin" d="M 980 720 L 1130 720" marker-end="url(#arrow-green)"/>
+  <text class="tiny" x="545" y="704" text-anchor="middle" fill="#16a34a">next leaf</text>
+  <text class="tiny" x="1055" y="704" text-anchor="middle" fill="#16a34a">next leaf</text>
+
+  <rect class="disk" x="100" y="522" width="305" height="80" rx="12"/>
+  <text class="label" x="252.5" y="552" text-anchor="middle">Page Files</text>
+  <text class="mono" x="252.5" y="580" text-anchor="middle">pages/page-00000000000000000017.json</text>
+
+  <rect class="disk" x="1195" y="522" width="305" height="80" rx="12"/>
+  <text class="label" x="1347.5" y="552" text-anchor="middle">Index Directory</text>
+  <text class="mono" x="1347.5" y="580" text-anchor="middle">data/indexes/idx_users_tier/</text>
+
+  <path class="line amber dash thin" d="M 405 562 L 585 548" marker-end="url(#arrow-amber)"/>
+  <path class="line amber dash thin" d="M 1195 562 L 1015 548" marker-end="url(#arrow-amber)"/>
+
+  <rect class="band" x="60" y="840" width="1480" height="150" rx="18"/>
+  <text class="band-title" x="100" y="882">Lookup Result and Authoritative Row Read</text>
+
+  <rect class="index" x="130" y="910" width="330" height="55" rx="12"/>
+  <text class="label" x="295" y="943" text-anchor="middle">B+ tree returns candidate row keys</text>
+
+  <rect class="lsm" x="620" y="900" width="355" height="75" rx="12"/>
+  <text class="heading" x="797.5" y="929" text-anchor="middle">LSM Table: users</text>
+  <text class="small" x="797.5" y="956" text-anchor="middle">GetAsync(user:0001), GetAsync(user:0480), GetAsync(user:1001)</text>
+
+  <rect class="query" x="1135" y="910" width="330" height="55" rx="12"/>
+  <text class="label" x="1300" y="943" text-anchor="middle">Recheck predicate, project, apply LIMIT</text>
+
+  <path class="line green" d="M 460 937 L 620 937" marker-end="url(#arrow-green)"/>
+  <path class="line blue" d="M 975 937 L 1135 937" marker-end="url(#arrow-blue)"/>
+
+  <text class="tiny" x="800" y="1018" text-anchor="middle" fill="#64748b">The B+ tree is an acceleration structure. The LSM table remains the source of truth for returned rows.</text>
+</svg>

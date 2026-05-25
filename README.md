@@ -158,6 +158,8 @@ indexes for JSON value equality filters.
 
 ### B+ Trees and JSON Value Indexes
 
+![Disk-backed B+ tree JSON value index architecture](./docs/bplus-tree-index-architecture.svg)
+
 JSON value indexes live under `Indexes/` and are intentionally separate from the
 LSM tree implementation. The storage engine remains a key/value LSM tree; the
 index module is an auxiliary lookup structure used by SQL when a query filters
