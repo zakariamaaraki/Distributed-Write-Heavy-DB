@@ -13,5 +13,6 @@ ENV ASPNETCORE_URLS=http://+:8080
 
 COPY --from=build /app/publish ./
 EXPOSE 8080
+EXPOSE 6543
 
 ENTRYPOINT ["dotnet", "LsmWriteDb.dll"]

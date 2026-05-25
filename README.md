@@ -364,6 +364,38 @@ Protocol basics:
 - Errors return `ERR "message"`.
 - `QUIT;`, `EXIT;`, or `\q` closes the session.
 
+### Run the Docker TCP SQL CLI
+
+The easiest way to try the TCP SQL session protocol is the local PowerShell CLI
+script. It requires Docker Desktop to be running.
+
+From the repository root, run:
+
+```powershell
+.\scripts\tcp-sql-cli.ps1 -Rebuild
+```
+
+The script builds the Docker image when needed, starts the database container in
+detached mode, waits for the TCP SQL listener, and then opens a colored CLI.
+Enter SQL statements ending with `;`. Type `exit`, `quit`, or `\q` to disconnect.
+
+Example:
+
+```text
+sql> CREATE TABLE users;
+sql> INSERT INTO users VALUES ('user:1001', '{"name":"Ada","tier":"gold"}');
+sql> CREATE INDEX idx_users_tier ON users (value.tier);
+sql> SELECT key, value FROM users WHERE value.tier = 'gold';
+sql> exit
+```
+
+Use `-KeepContainer` if you want the detached database container to keep running
+after the CLI exits:
+
+```powershell
+.\scripts\tcp-sql-cli.ps1 -KeepContainer
+```
+
 Configure it with:
 
 ```json
@@ -753,7 +785,43 @@ docker build -t heavy-write-db .
 Run the container:
 
 ```bash
-docker run --rm -p 8080:8080 heavy-write-db
+docker run --rm -p 8080:8080 -p 6543:6543 \
+  -e TcpSql__Host=0.0.0.0 \
+  heavy-write-db
+```
+
+Start a detached Docker container and open the interactive TCP SQL CLI:
+
+```powershell
+.\scripts\tcp-sql-cli.ps1
+```
+
+What the script does:
+
+- Builds the Docker image automatically when it does not exist.
+- Runs a detached container with HTTP on `http://localhost:8080` and TCP SQL on
+  `127.0.0.1:6543`.
+- Opens an interactive SQL prompt that supports multi-line statements ending
+  with `;`.
+- Sends `QUIT;` and removes the container when you type `exit`, `quit`, or
+  `\q`.
+
+Useful options:
+
+```powershell
+.\scripts\tcp-sql-cli.ps1 -Rebuild
+.\scripts\tcp-sql-cli.ps1 -KeepContainer
+.\scripts\tcp-sql-cli.ps1 -TcpPort 7654 -HttpPort 9080
+```
+
+Example CLI session:
+
+```text
+sql> CREATE TABLE users;
+sql> INSERT INTO users VALUES ('user:1001', '{"name":"Ada","tier":"gold"}');
+sql> CREATE INDEX idx_users_tier ON users (value.tier);
+sql> SELECT key, value FROM users WHERE value.tier = 'gold';
+sql> exit
 ```
 
 Run a local three-node Raft cluster:
