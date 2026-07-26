@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1580" viewBox="0 0 1800 1580" role="img" aria-labelledby="title desc">
+  <title id="title">SSTable block storage, Bloom filter, and sparse index layout</title>
+  <desc id="desc">Detailed SSTable layout showing the data file as concatenated sorted JSON blocks, the Bloom filter sidecar for key membership checks, and the sparse index sidecar mapping key ranges to byte offsets and block lengths.</desc>
+
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .page { fill: #f8fafc; }
+      .header { fill: #0f172a; }
+      .band { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .data { fill: #eff6ff; stroke: #2563eb; stroke-width: 2.5; }
+      .bloom { fill: #ecfdf5; stroke: #16a34a; stroke-width: 2.5; }
+      .index { fill: #fff7ed; stroke: #d97706; stroke-width: 2.5; }
+      .block { fill: #ffffff; stroke: #94a3b8; stroke-width: 2; }
+      .block-hit { fill: #fffbeb; stroke: #d97706; stroke-width: 3; }
+      .chip-blue { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
+      .chip-green { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.5; }
+      .chip-amber { fill: #fef3c7; stroke: #d97706; stroke-width: 1.5; }
+      .title { font: 700 36px Arial, sans-serif; fill: #ffffff; }
+      .subtitle { font: 500 16px Arial, sans-serif; fill: #334155; }
+      .band-title { font: 700 24px Arial, sans-serif; fill: #0f172a; }
+      .heading { font: 700 20px Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 16px Arial, sans-serif; fill: #1f2937; }
+      .small { font: 500 14px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 12px Arial, sans-serif; fill: #64748b; }
+      .mono { font: 600 13px Consolas, monospace; fill: #1f2937; }
+      .mono-small { font: 600 12px Consolas, monospace; fill: #1f2937; }
+      .mono-tiny { font: 600 11px Consolas, monospace; fill: #334155; }
+      .line { fill: none; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { stroke-width: 2.25; }
+      .blue { stroke: #2563eb; }
+      .green { stroke: #16a34a; }
+      .amber { stroke: #d97706; }
+      .gray { stroke: #64748b; }
+      .dash { stroke-dasharray: 8 8; }
+    </style>
+  </defs>
+
+  <rect class="page" x="0" y="0" width="1800" height="1580"/>
+  <rect class="header" x="0" y="0" width="1800" height="92"/>
+  <text class="title" x="900" y="58" text-anchor="middle">SSTable Blocks, Bloom Filter, and Sparse Index</text>
+  <text class="subtitle" x="900" y="125" text-anchor="middle">One flush writes a sorted SSTable data file plus two JSON sidecars: a Bloom filter for fast misses and a sparse index that maps key ranges to byte ranges.</text>
+
+  <rect class="band" x="60" y="155" width="1680" height="160" rx="18"/>
+  <text class="band-title" x="100" y="196">Files Created for One Table Flush</text>
+
+  <rect class="data" x="100" y="225" width="480" height="60" rx="12"/>
+  <text class="heading" x="340" y="250" text-anchor="middle">SSTable Data File</text>
+  <text class="mono" x="340" y="274" text-anchor="middle">sstable-202607261430001234567-abcd.json</text>
+
+  <rect class="bloom" x="665" y="225" width="430" height="60" rx="12"/>
+  <text class="heading" x="880" y="250" text-anchor="middle">Bloom Filter Sidecar</text>
+  <text class="mono" x="880" y="274" text-anchor="middle">sstable-...abcd.bloom.json</text>
+
+  <rect class="index" x="1180" y="225" width="465" height="60" rx="12"/>
+  <text class="heading" x="1412.5" y="250" text-anchor="middle">Sparse Index Sidecar</text>
+  <text class="mono" x="1412.5" y="274" text-anchor="middle">sstable-...abcd.index.json</text>
+
+  <path class="line gray thin dash" d="M 580 255 L 665 255" marker-end="url(#arrow-gray)"/>
+  <path class="line gray thin dash" d="M 1095 255 L 1180 255" marker-end="url(#arrow-gray)"/>
+  <text class="tiny" x="620" y="235" text-anchor="middle">same base filename</text>
+  <text class="tiny" x="1138" y="235" text-anchor="middle">same base filename</text>
+
+  <rect class="band" x="60" y="345" width="1680" height="155" rx="18"/>
+  <text class="band-title" x="100" y="386">Point Read Flow for key = customer:1004</text>
+
+  <rect class="data" x="100" y="415" width="245" height="58" rx="12"/>
+  <text class="label" x="222.5" y="439" text-anchor="middle">Memtable Miss</text>
+  <text class="tiny" x="222.5" y="462" text-anchor="middle">check newest SSTable first</text>
+
+  <rect class="bloom" x="420" y="405" width="285" height="78" rx="12"/>
+  <text class="label" x="562.5" y="430" text-anchor="middle">1. Bloom Filter</text>
+  <text class="small" x="562.5" y="454" text-anchor="middle">definite miss => skip file</text>
+  <text class="small" x="562.5" y="474" text-anchor="middle">possible hit => read index</text>
+
+  <rect class="index" x="780" y="405" width="320" height="78" rx="12"/>
+  <text class="label" x="940" y="430" text-anchor="middle">2. Sparse Index</text>
+  <text class="mono-small" x="940" y="455" text-anchor="middle">customer:1002 &lt;= key &lt;= customer:1004</text>
+  <text class="small" x="940" y="475" text-anchor="middle">select entry with offset 300</text>
+
+  <rect class="data" x="1175" y="405" width="250" height="78" rx="12"/>
+  <text class="label" x="1300" y="430" text-anchor="middle">3. Seek + Read</text>
+  <text class="mono-small" x="1300" y="455" text-anchor="middle">stream.Seek(300)</text>
+  <text class="mono-small" x="1300" y="475" text-anchor="middle">read 370 bytes</text>
+
+  <rect class="block-hit" x="1500" y="405" width="200" height="78" rx="12"/>
+  <text class="label" x="1600" y="430" text-anchor="middle">4. Deserialize</text>
+  <text class="small" x="1600" y="455" text-anchor="middle">search block JSON</text>
+  <text class="small" x="1600" y="475" text-anchor="middle">return exact key</text>
+
+  <path class="line blue" d="M 345 444 L 420 444" marker-end="url(#arrow-blue)"/>
+  <path class="line green" d="M 705 444 L 780 444" marker-end="url(#arrow-green)"/>
+  <path class="line amber" d="M 1100 444 L 1175 444" marker-end="url(#arrow-amber)"/>
+  <path class="line blue" d="M 1425 444 L 1500 444" marker-end="url(#arrow-blue)"/>
+
+  <rect class="band" x="60" y="535" width="1680" height="955" rx="18"/>
+  <text class="band-title" x="100" y="576">Physical JSON Layout and Index Mapping</text>
+
+  <rect class="bloom" x="95" y="615" width="430" height="815" rx="14"/>
+  <text class="heading" x="310" y="650" text-anchor="middle">.bloom.json</text>
+  <text class="small" x="310" y="674" text-anchor="middle">Contains hashes of keys only, never values or offsets.</text>
+
+  <rect class="block" x="125" y="705" width="370" height="125" rx="10"/>
+  <text class="mono-small" x="145" y="732">{</text>
+  <text class="mono-small" x="165" y="756">"bitSize": 96,</text>
+  <text class="mono-small" x="165" y="780">"hashCount": 7,</text>
+  <text class="mono-small" x="165" y="804">"bitsBase64": "AABcK8v8Q1A..."</text>
+  <text class="mono-small" x="145" y="828">}</text>
+
+  <rect class="chip-green" x="125" y="860" width="370" height="44" rx="10"/>
+  <text class="mono-small" x="310" y="888" text-anchor="middle">keys added: customer:1000 ... customer:1006</text>
+
+  <rect class="block" x="125" y="930" width="370" height="165" rx="10"/>
+  <text class="label" x="310" y="960" text-anchor="middle">Probe customer:1004</text>
+  <text class="mono-small" x="145" y="990">hashes -> bit positions</text>
+  <text class="mono-small" x="145" y="1014">[12, 19, 33, 41, 58, 70, 91]</text>
+  <text class="mono-small" x="145" y="1044">all bits are set => possible hit</text>
+  <text class="mono-small" x="145" y="1070">any missing bit => skip this SSTable</text>
+
+  <rect class="block" x="125" y="1130" width="370" height="160" rx="10"/>
+  <text class="label" x="310" y="1160" text-anchor="middle">What the Bloom filter does not know</text>
+  <text class="small" x="145" y="1192">It cannot point to a block.</text>
+  <text class="small" x="145" y="1220">It cannot prove a key exists.</text>
+  <text class="small" x="145" y="1248">It only prevents definite misses from</text>
+  <text class="small" x="145" y="1276">opening the SSTable data file.</text>
+
+  <text class="tiny" x="310" y="1364" text-anchor="middle">A possible hit continues to the sparse index, then the selected</text>
+  <text class="tiny" x="310" y="1384" text-anchor="middle">data block is searched for the exact key and newest sequence.</text>
+
+  <rect class="index" x="565" y="615" width="475" height="815" rx="14"/>
+  <text class="heading" x="802.5" y="650" text-anchor="middle">.index.json Sparse Index</text>
+  <text class="small" x="802.5" y="674" text-anchor="middle">One JSON entry per block in the data file.</text>
+
+  <rect class="block" x="595" y="705" width="415" height="130" rx="10"/>
+  <text class="label" x="625" y="730">index[0] -> block 0</text>
+  <text class="mono-small" x="625" y="755">{ "firstKey": "customer:1000",</text>
+  <text class="mono-small" x="625" y="779">  "lastKey": "customer:1001",</text>
+  <text class="mono-small" x="625" y="803">  "offset": 0, "length": 300,</text>
+  <text class="mono-small" x="625" y="827">  "recordCount": 2 }</text>
+
+  <rect class="block-hit" x="595" y="860" width="415" height="130" rx="10"/>
+  <text class="label" x="625" y="885">index[1] -> block 1 selected</text>
+  <text class="mono-small" x="625" y="910">{ "firstKey": "customer:1002",</text>
+  <text class="mono-small" x="625" y="934">  "lastKey": "customer:1004",</text>
+  <text class="mono-small" x="625" y="958">  "offset": 300, "length": 370,</text>
+  <text class="mono-small" x="625" y="982">  "recordCount": 2 }</text>
+
+  <rect class="block" x="595" y="1015" width="415" height="130" rx="10"/>
+  <text class="label" x="625" y="1040">index[2] -> block 2</text>
+  <text class="mono-small" x="625" y="1065">{ "firstKey": "customer:1005",</text>
+  <text class="mono-small" x="625" y="1089">  "lastKey": "customer:1006",</text>
+  <text class="mono-small" x="625" y="1113">  "offset": 670, "length": 315,</text>
+  <text class="mono-small" x="625" y="1137">  "recordCount": 2 }</text>
+
+  <rect class="block" x="595" y="1190" width="415" height="150" rx="10"/>
+  <text class="label" x="802.5" y="1220" text-anchor="middle">Lookup rule</text>
+  <text class="mono-small" x="625" y="1252">firstKey &lt;= requested key &lt;= lastKey</text>
+  <text class="small" x="625" y="1284">Only that block byte range is read.</text>
+  <text class="small" x="625" y="1312">If no range contains the key, this</text>
+  <text class="small" x="625" y="1336">SSTable cannot contain the key.</text>
+
+  <rect class="data" x="1080" y="615" width="605" height="815" rx="14"/>
+  <text class="heading" x="1382.5" y="650" text-anchor="middle">SSTable .json Data File</text>
+  <text class="small" x="1382.5" y="674" text-anchor="middle">A byte stream of concatenated JSON arrays, one array per block.</text>
+  <text class="tiny" x="1382.5" y="696" text-anchor="middle">There is no outer JSON array around the whole file.</text>
+
+  <rect class="chip-blue" x="1110" y="725" width="170" height="38" rx="8"/>
+  <rect class="chip-amber" x="1280" y="725" width="210" height="38" rx="0"/>
+  <rect class="chip-blue" x="1490" y="725" width="155" height="38" rx="0"/>
+  <text class="mono-tiny" x="1195" y="749" text-anchor="middle">0..299</text>
+  <text class="mono-tiny" x="1385" y="749" text-anchor="middle">300..669</text>
+  <text class="mono-tiny" x="1567.5" y="749" text-anchor="middle">670..984</text>
+  <text class="tiny" x="1610" y="714" text-anchor="middle">byte offsets</text>
+
+  <rect class="block" x="1110" y="790" width="535" height="190" rx="10"/>
+  <text class="label" x="1130" y="815">Block 0 JSON array, offset 0, length 300</text>
+  <text class="mono-tiny" x="1130" y="841">[</text>
+  <text class="mono-tiny" x="1150" y="863">{ "sequence": 41, "key": "customer:1000",</text>
+  <text class="mono-tiny" x="1170" y="883">"value": "{\"name\":\"Ada\",\"tier\":\"gold\"}",</text>
+  <text class="mono-tiny" x="1170" y="903">"isDeleted": false },</text>
+  <text class="mono-tiny" x="1150" y="927">{ "sequence": 42, "key": "customer:1001",</text>
+  <text class="mono-tiny" x="1170" y="947">"value": "{\"name\":\"Ben\",\"tier\":\"silver\"}",</text>
+  <text class="mono-tiny" x="1170" y="967">"isDeleted": false }</text>
+  <text class="mono-tiny" x="1130" y="977">]</text>
+
+  <rect class="block-hit" x="1110" y="1005" width="535" height="190" rx="10"/>
+  <text class="label" x="1130" y="1030">Block 1 JSON array, offset 300, length 370</text>
+  <text class="mono-tiny" x="1130" y="1056">[</text>
+  <text class="mono-tiny" x="1150" y="1078">{ "sequence": 43, "key": "customer:1002",</text>
+  <text class="mono-tiny" x="1170" y="1098">"value": "{\"name\":\"Cy\",\"tier\":\"gold\"}",</text>
+  <text class="mono-tiny" x="1170" y="1118">"isDeleted": false },</text>
+  <text class="mono-tiny" x="1150" y="1142">{ "sequence": 45, "key": "customer:1004",</text>
+  <text class="mono-tiny" x="1170" y="1162">"value": "{\"name\":\"Eve\",\"tier\":\"gold\"}",</text>
+  <text class="mono-tiny" x="1170" y="1182">"isDeleted": false }</text>
+  <text class="mono-tiny" x="1130" y="1192">]</text>
+
+  <rect class="block" x="1110" y="1220" width="535" height="190" rx="10"/>
+  <text class="label" x="1130" y="1245">Block 2 JSON array, offset 670, length 315</text>
+  <text class="mono-tiny" x="1130" y="1271">[</text>
+  <text class="mono-tiny" x="1150" y="1293">{ "sequence": 46, "key": "customer:1005",</text>
+  <text class="mono-tiny" x="1170" y="1313">"value": null, "isDeleted": true },</text>
+  <text class="mono-tiny" x="1150" y="1337">{ "sequence": 47, "key": "customer:1006",</text>
+  <text class="mono-tiny" x="1170" y="1357">"value": "{\"name\":\"Fox\",\"tier\":\"silver\"}",</text>
+  <text class="mono-tiny" x="1170" y="1377">"isDeleted": false }</text>
+  <text class="mono-tiny" x="1130" y="1397">]</text>
+
+  <path class="line green thin" d="M 1010 770 C 1048 770 1050 865 1110 865" marker-end="url(#arrow-green)"/>
+  <path class="line amber" d="M 1010 925 C 1050 925 1055 1088 1110 1088" marker-end="url(#arrow-amber)"/>
+  <path class="line green thin" d="M 1010 1080 C 1048 1080 1050 1295 1110 1295" marker-end="url(#arrow-green)"/>
+
+  <path class="line green thin dash" d="M 525 1010 C 550 1010 550 925 595 925" marker-end="url(#arrow-green)"/>
+  <text class="tiny" x="548" y="955" text-anchor="middle">possible hit reads index</text>
+
+  <rect class="band" x="60" y="1510" width="1680" height="48" rx="10"/>
+  <text class="small" x="900" y="1540" text-anchor="middle">Point read result: Bloom says possible, sparse index chooses block 1, the store seeks to byte 300, reads 370 bytes, deserializes only that JSON block, and matches customer:1004.</text>
+</svg>

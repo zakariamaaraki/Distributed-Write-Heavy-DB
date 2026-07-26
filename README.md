@@ -31,7 +31,7 @@ This project is database backed by a write-optimized key/value store.
 
 ## High-Level Architecture
 
-![High-level architecture of the distributed LSM database](./docs/high-level-architecture.svg)
+![High-level architecture of the distributed LSM database](./docs/high-level-architecture.svg?raw=true)
 
 ## Data Model
 
@@ -158,7 +158,7 @@ indexes for JSON value equality filters.
 
 ### B+ Trees and JSON Value Indexes
 
-![Disk-backed B+ tree JSON value index architecture](./docs/bplus-tree-index-architecture.svg)
+![Disk-backed B+ tree JSON value index architecture](./docs/bplus-tree-index-architecture.svg?raw=true)
 
 JSON value indexes live under `Indexes/` and are intentionally separate from the
 LSM tree implementation. The storage engine remains a key/value LSM tree; the
@@ -395,7 +395,7 @@ command. Use `\clear` to discard an unfinished statement.
 `SELECT` results are rendered as a table in the CLI. Other successful
 statements are shown as compact `OK` summaries.
 
-![TCP SQL CLI SELECT table output](./docs/tcp-sql-cli-select-table.png)
+![TCP SQL CLI SELECT table output](./docs/tcp-sql-cli-select-table.png?raw=true)
 
 If you see an error about `dockerDesktopLinuxEngine` or Docker being unreachable,
 start Docker Desktop and wait until the Linux engine is running, then run the
@@ -502,11 +502,11 @@ from the storage engine.
 
 Leader election:
 
-![Raft leader election](./docs/raft-leader-election.gif)
+![Raft leader election](./docs/raft-leader-election.gif?raw=true)
 
 Change-log subscription:
 
-![Raft change-log watch](./docs/raft-change-log-watch.gif)
+![Raft change-log watch](./docs/raft-change-log-watch.gif?raw=true)
 
 Each node has a role:
 
@@ -610,7 +610,7 @@ frontend build step. The page posts queries to `/sql`, renders returned rows as 
 table, stores recent queries in browser local storage, and keeps the active
 transaction id in the console input.
 
-![SQL console screenshot](./docs/sql-console.png)
+![SQL console screenshot](./docs/sql-console.png?raw=true)
 
 The console has direct controls for `BEGIN`, `COMMIT`, and `ROLLBACK`. When
 `BEGIN` returns a transaction id, the console stores it and sends it with later
@@ -625,7 +625,7 @@ watching committed change-log events. Enter the last processed sequence, connect
 to the stream, and the page shows replayed and live events in a table. It uses
 `/changes/stream` for live updates and `/changes` for one-time replay.
 
-![Change log console screenshot](./docs/change-log-console.png)
+![Change log console screenshot](./docs/change-log-console.png?raw=true)
 
 ### Ordered MemTable
 
@@ -647,6 +647,13 @@ The memtable supports:
 - snapshotting sorted records during flush.
 
 ### SSTables
+
+The diagram below shows the physical files written for one flushed SSTable:
+the data file is a byte stream of sorted JSON block arrays, the Bloom sidecar
+stores key membership bits, and the sparse index sidecar maps key ranges to
+exact byte offsets and lengths inside the data file.
+
+![SSTable block storage, Bloom filter, and sparse index layout](./docs/sstable-block-index-architecture.svg)
 
 Each table flush creates one immutable sorted string table on disk under that
 table's `sstables/` directory.
