@@ -630,8 +630,8 @@ the transaction buffer contains only `A = 10` and `D = 4`. It does not contain c
 
 ### Comparison with stronger isolation levels
 
-- **Snapshot isolation:** a transaction reads from one consistent snapshot of committed data. Later commits by other transactions are not visible to it, so repeated reads see the same versions.
-- **Serializable isolation:** concurrent transactions produce the same result as if they had executed one at a time, usually through locking, validation, or serialization.
+- **Snapshot isolation:** a transaction reads from one consistent snapshot of committed data. Later commits by other transactions are not visible to it, so repeated reads see the same versions. The tradeoff is extra version storage and cleanup work, plus possible write conflicts or long-lived snapshots that retain old data and consume memory or disk space.
+- **Serializable isolation:** concurrent transactions produce the same result as if they had executed one at a time, usually through locking, validation, or serialization. The tradeoff is lower concurrency: transactions may block, deadlock, or be aborted and retried, and conflict tracking adds CPU and memory overhead.
 
 This implementation provides neither guarantee: unstaged reads can observe newer commits, and conflicting writes use last-commit-wins semantics.
 - Durability: commit appends each table's committed batch to that table's WAL
