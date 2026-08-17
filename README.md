@@ -595,15 +595,45 @@ uncommitted changes from becoming durable.
 - Consistency: committed records still go through the same key/value validation,
   table validation, sequence numbering, tombstone handling, WAL, memtable,
   flush, and compaction rules as direct writes.
-- Isolation: uncommitted writes are private to their transaction, and a
-  transaction reads its own staged writes. This is not snapshot or serializable
-  isolation: reads for keys not staged in the transaction can see newer commits
-  from other transactions, and conflicting writes use last commit wins.
-**Warning:** This is not snapshot or serializable isolation. More precisely, the implementation provides read-your-writes behavior over the current committed state: a transaction sees its own staged values, while each unstaged read sees committed data as it exists when that read runs. This is commonly described as read-committed visibility with a transaction-local write buffer, but it does not provide conflict detection or stronger transaction isolation.
+### Isolation and transaction visibility
 
-Snapshot isolation gives a transaction a consistent snapshot of committed data from one point in time. Later commits from other transactions are invisible to it, so repeated reads of the same unstaged key return the same version. Serializable isolation is stronger: concurrent transactions must produce the same result as if they had run one at a time, usually through locking, validation, or serialization. This implementation provides neither guarantee: unstaged reads may observe newer commits, and concurrent writes to the same key use last-commit-wins semantics.
+**Warning:** This implementation is not snapshot isolation or serializable isolation.
 
-Each transaction has a small private transaction buffer, not a copy of the entire memtable. The buffer is a .NET `Dictionary<TransactionWriteKey, TransactionWrite>` keyed by table and key, so it stores only the transaction's staged writes and keeps the latest write for each key. For example, if the memtable contains `A = 1`, `B = 2`, and `C = 3`, and a transaction stages `A = 10` and `D = 4`, its buffer contains only `A = 10` and `D = 4`; `B` and `C` are not copied. Reads check this buffer first and then read unstaged keys from the current committed state.
+Its isolation model is best described as **read-your-writes with read-committed visibility**:
+
+- A transaction's uncommitted writes are private and invisible to other transactions.
+- Reads first check the transaction's own staged writes.
+- If a key is not staged, the read consults the current committed state.
+- Therefore, a later read can see a commit made by another transaction after an earlier read.
+- If transactions write the same key, the last transaction to commit wins. There is no conflict detection.
+
+### Transaction buffer
+
+Each transaction has a small private buffer. It does not copy the entire memtable. Internally, the buffer is a .NET `Dictionary<TransactionWriteKey, TransactionWrite>` keyed by table and key. A second write to the same key replaces the first staged write.
+
+For example, if the memtable contains:
+
+```text
+A = 1
+B = 2
+C = 3
+```
+
+and a transaction stages:
+
+```text
+A = 10
+D = 4
+```
+
+the transaction buffer contains only `A = 10` and `D = 4`. It does not contain copies of `B` or `C`.
+
+### Comparison with stronger isolation levels
+
+- **Snapshot isolation:** a transaction reads from one consistent snapshot of committed data. Later commits by other transactions are not visible to it, so repeated reads see the same versions.
+- **Serializable isolation:** concurrent transactions produce the same result as if they had executed one at a time, usually through locking, validation, or serialization.
+
+This implementation provides neither guarantee: unstaged reads can observe newer commits, and conflicting writes use last-commit-wins semantics.
 - Durability: commit appends each table's committed batch to that table's WAL
   before applying it to the memtable. After a restart, complete committed
   batches are replayed. Partial trailing batch records are ignored, so

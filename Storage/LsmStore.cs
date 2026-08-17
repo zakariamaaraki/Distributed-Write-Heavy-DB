@@ -551,6 +551,24 @@ public sealed class LsmStore
     {
         try
         {
+            using var envelopeDocument = JsonDocument.Parse(line);
+            if (envelopeDocument.RootElement.TryGetProperty("payload", out var payloadElement)
+                && envelopeDocument.RootElement.TryGetProperty("checksum", out var checksumElement))
+            {
+                var payload = payloadElement.GetString();
+                var checksum = checksumElement.GetString();
+                if (payload is null || checksum is null
+                    || !string.Equals(
+                        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))),
+                        checksum,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                line = payload;
+            }
+
             using var document = JsonDocument.Parse(line);
 
             if (document.RootElement.TryGetProperty("type", out var typeElement)
