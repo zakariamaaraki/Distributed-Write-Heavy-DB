@@ -12,6 +12,7 @@ This project is database backed by a write-optimized key/value store.
 - Use configurable SSTable blocks with sparse indexes so point reads can seek
   to a small block instead of reading a whole SSTable.
 - Support explicit transactions with begin, staged writes, commit, and rollback.
+- Use read-your-writes with read-committed visibility for transactions; conflicting writes use last-commit-wins semantics, with no snapshot or serializable isolation.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
 - Support SQL table creation, point reads, key range reads, inserts, updates,
