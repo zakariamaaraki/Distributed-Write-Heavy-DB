@@ -147,28 +147,28 @@
   <text class="mono-small" x="625" y="755">{ "firstKey": "customer:1000",</text>
   <text class="mono-small" x="625" y="779">  "lastKey": "customer:1001",</text>
   <text class="mono-small" x="625" y="803">  "offset": 0, "length": 300,</text>
-  <text class="mono-small" x="625" y="827">  "recordCount": 2 }</text>
+  <text class="mono-small" x="625" y="827">  "recordCount": 2, "checksum": "SHA-256" }</text>
 
   <rect class="block-hit" x="595" y="860" width="415" height="130" rx="10"/>
   <text class="label" x="625" y="885">index[1] -> block 1 selected</text>
   <text class="mono-small" x="625" y="910">{ "firstKey": "customer:1002",</text>
   <text class="mono-small" x="625" y="934">  "lastKey": "customer:1004",</text>
   <text class="mono-small" x="625" y="958">  "offset": 300, "length": 370,</text>
-  <text class="mono-small" x="625" y="982">  "recordCount": 2 }</text>
+  <text class="mono-small" x="625" y="982">  "recordCount": 2, "checksum": "SHA-256" }</text>
 
   <rect class="block" x="595" y="1015" width="415" height="130" rx="10"/>
   <text class="label" x="625" y="1040">index[2] -> block 2</text>
   <text class="mono-small" x="625" y="1065">{ "firstKey": "customer:1005",</text>
   <text class="mono-small" x="625" y="1089">  "lastKey": "customer:1006",</text>
   <text class="mono-small" x="625" y="1113">  "offset": 670, "length": 315,</text>
-  <text class="mono-small" x="625" y="1137">  "recordCount": 2 }</text>
+  <text class="mono-small" x="625" y="1137">  "recordCount": 2, "checksum": "SHA-256" }</text>
 
   <rect class="block" x="595" y="1190" width="415" height="150" rx="10"/>
   <text class="label" x="802.5" y="1220" text-anchor="middle">Lookup rule</text>
   <text class="mono-small" x="625" y="1252">firstKey &lt;= requested key &lt;= lastKey</text>
   <text class="small" x="625" y="1284">Only that block byte range is read.</text>
   <text class="small" x="625" y="1312">If no range contains the key, this</text>
-  <text class="small" x="625" y="1336">SSTable cannot contain the key.</text>
+<text class="small" x="625" y="1336">SSTable cannot contain the key.</text>
 
   <rect class="data" x="1080" y="615" width="605" height="815" rx="14"/>
   <text class="heading" x="1382.5" y="650" text-anchor="middle">SSTable .json Data File</text>
@@ -223,5 +223,5 @@
   <text class="tiny" x="548" y="955" text-anchor="middle">possible hit reads index</text>
 
   <rect class="band" x="60" y="1510" width="1680" height="48" rx="10"/>
-  <text class="small" x="900" y="1540" text-anchor="middle">Point read result: Bloom says possible, sparse index chooses block 1, the store seeks to byte 300, reads 370 bytes, deserializes only that JSON block, and matches customer:1004.</text>
+  <text class="small" x="900" y="1540" text-anchor="middle">Point read result: Bloom says possible, sparse index chooses block 1, verifies its SHA-256 checksum, seeks to byte 300, reads 370 bytes, deserializes only that JSON block, and matches customer:1004.</text>
 </svg>
