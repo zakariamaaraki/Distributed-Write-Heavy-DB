@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using LsmWriteDb.ChangeLogs;
 
 namespace LsmWriteDb.Storage;
@@ -477,7 +478,9 @@ public sealed class LsmStore
 
     private async Task AppendWalLineAsync<T>(T value)
     {
-        var line = JsonSerializer.Serialize(value, WalJsonOptions);
+        var payload = JsonSerializer.Serialize(value, WalJsonOptions);
+        var checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+        var line = JsonSerializer.Serialize(new WalEnvelope(payload, checksum), WalJsonOptions);
 
         await using var stream = new FileStream(
             _walPath,
@@ -705,3 +708,4 @@ internal sealed class OrderedMemTable
 internal sealed record StoredRecord(long Sequence, string Key, string? Value, bool IsDeleted);
 
 internal sealed record WalCommittedBatch(string Type, IReadOnlyList<StoredRecord> Records);
+internal sealed record WalEnvelope(string Payload, string Checksum);

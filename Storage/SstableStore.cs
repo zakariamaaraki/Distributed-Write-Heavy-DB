@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace LsmWriteDb.Storage;
 
@@ -199,6 +200,11 @@ internal sealed class SstableStore
             totalRead += read;
         }
 
+        if (entry.Checksum is not null && !string.Equals(Convert.ToHexString(SHA256.HashData(buffer)), entry.Checksum, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"SSTable checksum mismatch at offset {entry.Offset}.");
+        }
+
         return JsonSerializer.Deserialize<List<StoredRecord>>(buffer, JsonOptions) ?? [];
     }
 
@@ -224,7 +230,8 @@ internal sealed class SstableStore
                 block.Records[^1].Key,
                 offset,
                 block.Bytes.Length,
-                block.Records.Count));
+                block.Records.Count,
+                Convert.ToHexString(SHA256.HashData(block.Bytes))));
         }
 
         return index;
@@ -274,7 +281,8 @@ internal sealed record SparseIndexEntry(
     string LastKey,
     long Offset,
     int Length,
-    int RecordCount);
+    int RecordCount,
+    string? Checksum = null);
 
 internal sealed record EncodedBlock(
     IReadOnlyList<StoredRecord> Records,

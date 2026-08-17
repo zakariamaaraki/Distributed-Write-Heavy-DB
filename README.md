@@ -450,6 +450,8 @@ On startup, the log is replayed so acknowledged writes are not lost.
 
 The log is reset after the current memtable is flushed to disk.
 
+WAL integrity: every new WAL line is wrapped with its JSON payload and an uppercase SHA-256 checksum. On replay, the checksum is verified before the payload is applied; corrupted or partially written entries are ignored. Legacy unwrapped JSON WAL lines remain readable.
+
 Each table has its own WAL under `data/tables/{table}/wal.log`. Direct `PUT`
 and `DELETE` requests are written to that table's log as individual records.
 Committed transaction writes are grouped by table and written as committed batch
@@ -597,6 +599,11 @@ uncommitted changes from becoming durable.
   transaction reads its own staged writes. This is not snapshot or serializable
   isolation: reads for keys not staged in the transaction can see newer commits
   from other transactions, and conflicting writes use last commit wins.
+**Warning:** This is not snapshot or serializable isolation. More precisely, the implementation provides read-your-writes behavior over the current committed state: a transaction sees its own staged values, while each unstaged read sees committed data as it exists when that read runs. This is commonly described as read-committed visibility with a transaction-local write buffer, but it does not provide conflict detection or stronger transaction isolation.
+
+Snapshot isolation gives a transaction a consistent snapshot of committed data from one point in time. Later commits from other transactions are invisible to it, so repeated reads of the same unstaged key return the same version. Serializable isolation is stronger: concurrent transactions must produce the same result as if they had run one at a time, usually through locking, validation, or serialization. This implementation provides neither guarantee: unstaged reads may observe newer commits, and concurrent writes to the same key use last-commit-wins semantics.
+
+Each transaction has a small private transaction buffer, not a copy of the entire memtable. The buffer is a .NET `Dictionary<TransactionWriteKey, TransactionWrite>` keyed by table and key, so it stores only the transaction's staged writes and keeps the latest write for each key. For example, if the memtable contains `A = 1`, `B = 2`, and `C = 3`, and a transaction stages `A = 10` and `D = 4`, its buffer contains only `A = 10` and `D = 4`; `B` and `C` are not copied. Reads check this buffer first and then read unstaged keys from the current committed state.
 - Durability: commit appends each table's committed batch to that table's WAL
   before applying it to the memtable. After a restart, complete committed
   batches are replayed. Partial trailing batch records are ignored, so
@@ -659,6 +666,8 @@ Each table flush creates one immutable sorted string table on disk under that
 table's `sstables/` directory.
 Records are written in key order, which makes range queries possible without
 loading the whole database into memory.
+
+Each SSTable block also stores an uppercase SHA-256 checksum in its sparse-index entry. Reads verify the checksum before deserializing the block and fail with `InvalidDataException` if the bytes have changed. Legacy SSTables without checksums remain readable.
 
 Each SSTable has a companion Bloom filter sidecar file. Point reads check the
 Bloom filter before opening the data file, which avoids unnecessary file reads
