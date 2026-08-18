@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lsmwrite-client"
+version = "0.1.0"
+description = "Python HTTP and SSE client for LsmWriteDb"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+py-modules = ["lsmwrite_client"]
+package-dir = {"" = "."}

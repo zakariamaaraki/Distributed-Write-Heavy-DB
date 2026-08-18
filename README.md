@@ -333,6 +333,43 @@ Current limitations:
 - `POST /raft/append-entries`: internal Raft heartbeat RPC used by the leader.
 - `GET /stats`: inspect database and per-table statistics.
 
+## Python Client
+
+The repository includes a dependency-free Python client in `python_client/` for the HTTP and Server-Sent Events APIs. It supports tables, key/value reads and writes, transactions, SQL execution, statistics, change-log replay, and reconnectable change streaming.
+
+Install it locally:
+
+```text
+cd python_client
+python -m pip install .
+```
+
+Example:
+
+```python
+import logging
+from lsmwrite_client import LsmWriteDbClient
+
+logging.basicConfig(level=logging.INFO)
+client = LsmWriteDbClient("http://localhost:8080")
+client.put("user:1", "Ada")
+print(client.get("user:1"))
+
+transaction = client.begin()
+transaction.put("user:2", "Grace")
+transaction.commit()
+
+for event in client.stream_changes():
+    print(event)
+```
+
+A Docker-backed integration test is available at `python_client/run_integration_test.py`; it starts the local Compose cluster, discovers a leader, runs CRUD, transaction, SQL, change-log, and stats commands through the client, and tears the cluster down afterward.
+
+The client uses the standard `logging` module under the `lsmwrite` logger. Request
+method, URL, retry attempt, response status, elapsed time, transport failures,
+stream reconnects, and SSE heartbeats are logged at appropriate levels. Transient
+HTTP failures and transport errors are retried with exponential backoff. Change
+stream reconnection resumes from the last received sequence.
 ## TCP SQL
 
 The service also exposes a long-lived TCP SQL session endpoint, similar to a
