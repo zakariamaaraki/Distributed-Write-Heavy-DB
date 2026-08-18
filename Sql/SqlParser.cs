@@ -185,9 +185,9 @@ internal sealed class SqlParser
         {
             var joinTable = ExpectTableName();
             ExpectKeyword("ON");
-            var leftColumn = ExpectQualifiedColumn();
+            var leftColumn = ExpectJoinColumn();
             ExpectSymbol("=");
-            var rightColumn = ExpectQualifiedColumn();
+            var rightColumn = ExpectJoinColumn();
             join = new SqlJoinClause(joinTable, leftColumn, rightColumn);
         }
 
@@ -398,6 +398,23 @@ internal sealed class SqlParser
         return ExpectIdentifier().ToLowerInvariant();
     }
 
+    private string ExpectJoinColumn()
+    {
+        var table = ExpectIdentifier().ToLowerInvariant();
+        ExpectSymbol(".");
+        var column = ExpectIdentifier().ToLowerInvariant();
+        if (column == "key")
+            return $"{table}.key";
+        if (column != "value")
+            throw Error("JOIN columns must be table.key or table.value.path.");
+
+        var path = new List<string>();
+        while (MatchSymbol("."))
+            path.Add(ExpectIdentifier());
+        if (path.Count == 0)
+            throw Error("JSON property joins must specify a value path, for example table.value.customerId.");
+        return $"{table}.value.{string.Join(".", path)}";
+    }
     private string ExpectQualifiedColumn()
     {
         var first = ExpectIdentifier().ToLowerInvariant();

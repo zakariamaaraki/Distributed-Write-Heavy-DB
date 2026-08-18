@@ -312,6 +312,17 @@ INSERT INTO users VALUES ('u1', '{"name":"Ada"}')
 INSERT INTO orders VALUES ('u1', '{"item":"Book"}')
 SELECT * FROM users JOIN orders ON users.key = orders.key
 ```
+JSON properties can also be used as join keys. The properties must exist and
+have comparable JSON values on both sides; rows with missing properties are
+skipped. Existing JSON-property indexes can be used to optimize future join
+planning, while the current join implementation uses bounded scans:
+
+```sql
+SELECT users.key, orders.key
+FROM users
+JOIN orders ON users.value.customerId = orders.value.customerId
+LIMIT 100
+```
 ## HTTP API
 
 - `GET /tables`: list tables.

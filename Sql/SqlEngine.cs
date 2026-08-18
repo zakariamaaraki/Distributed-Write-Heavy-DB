@@ -184,17 +184,31 @@ public sealed class SqlEngine
         var join = statement.Join!;
         if (_database is null)
             throw new SqlExecutionException("JOIN requires the multi-table database engine.");
-        if (!string.Equals(join.LeftColumn, $"{statement.Table}.key", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(join.RightColumn, $"{join.Table}.key", StringComparison.OrdinalIgnoreCase))
-            throw new SqlExecutionException("Only joins on table.key = table.key are supported.");
 
+        var left = ParseJoinOperand(statement.Table, join.LeftColumn);
+        var right = ParseJoinOperand(join.Table, join.RightColumn);
         var leftRows = await _database.RangeAsync(statement.Table, null, null, 1_000);
         var rightRows = await _database.RangeAsync(join.Table, null, null, 1_000);
-        var rightByKey = rightRows.ToLookup(row => row.Key, StringComparer.Ordinal);
-        var rows = new List<IReadOnlyDictionary<string, string>>();
-        foreach (var left in leftRows)
+        var rightByValue = new Dictionary<string, List<KeyValueRow>>(StringComparer.Ordinal);
+        foreach (var row in rightRows)
         {
-            foreach (var right in rightByKey[left.Key])
+            if (JsonValueAccessor.TryReadComparableValue(row.Value, right.Path, out var value))
+            {
+                if (!rightByValue.TryGetValue(value, out var matches))
+                    rightByValue[value] = matches = [];
+                matches.Add(row);
+            }
+        }
+
+        var rows = new List<IReadOnlyDictionary<string, string>>();
+        foreach (var leftRow in leftRows)
+        {
+            var leftValue = left.IsKey ? leftRow.Key :
+                JsonValueAccessor.TryReadComparableValue(leftRow.Value, left.Path, out var extracted) ? extracted : null;
+            if (leftValue is null || !rightByValue.TryGetValue(leftValue, out var matches))
+                continue;
+
+            foreach (var rightRow in matches)
             {
                 var projected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 var columns = statement.Columns.SequenceEqual(["key", "value"], StringComparer.OrdinalIgnoreCase)
@@ -205,16 +219,30 @@ public sealed class SqlEngine
                     var parts = column.Split('.', 2);
                     if (parts.Length != 2 || (parts[1] != "key" && parts[1] != "value"))
                         throw new SqlExecutionException("JOIN columns must be qualified, for example users.value.");
-                    var row = string.Equals(parts[0], statement.Table, StringComparison.OrdinalIgnoreCase) ? left :
-                        string.Equals(parts[0], join.Table, StringComparison.OrdinalIgnoreCase) ? right :
+                    var row = string.Equals(parts[0], statement.Table, StringComparison.OrdinalIgnoreCase) ? leftRow :
+                        string.Equals(parts[0], join.Table, StringComparison.OrdinalIgnoreCase) ? rightRow :
                         throw new SqlExecutionException($"Unknown JOIN table qualifier '{parts[0]}'.");
                     projected[column] = parts[1] == "key" ? row.Key : row.Value;
                 }
                 rows.Add(projected);
-                if (rows.Count >= Math.Clamp(statement.Limit, 1, 1_000)) return SqlExecutionResult.WithRows("SELECT", rows);
+                if (rows.Count >= Math.Clamp(statement.Limit, 1, 1_000))
+                    return SqlExecutionResult.WithRows("SELECT", rows);
             }
         }
         return SqlExecutionResult.WithRows("SELECT", rows);
+    }
+
+    private static (bool IsKey, IReadOnlyList<string> Path) ParseJoinOperand(string table, string operand)
+    {
+        var prefix = table + ".";
+        if (!operand.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            throw new SqlExecutionException($"JOIN column '{operand}' does not belong to table '{table}'.");
+        var remainder = operand[prefix.Length..];
+        if (remainder == "key")
+            return (true, []);
+        if (!remainder.StartsWith("value.", StringComparison.OrdinalIgnoreCase))
+            throw new SqlExecutionException("JOIN columns must be table.key or table.value.path.");
+        return (false, remainder["value.".Length..].Split('.'));
     }
     private async Task<SqlExecutionResult> UpdateAsync(SqlUpdateStatement statement, Guid? transactionId)
     {
