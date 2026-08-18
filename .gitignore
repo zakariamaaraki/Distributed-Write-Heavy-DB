@@ -3,3 +3,8 @@ obj/
 data/
 *.log
 TestResults/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
