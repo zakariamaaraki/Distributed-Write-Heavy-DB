@@ -192,7 +192,8 @@ public sealed class SqlEngine
         var rightByValue = new Dictionary<string, List<KeyValueRow>>(StringComparer.Ordinal);
         foreach (var row in rightRows)
         {
-            if (JsonValueAccessor.TryReadComparableValue(row.Value, right.Path, out var value))
+            var value = right.IsKey ? row.Key : JsonValueAccessor.TryReadComparableValue(row.Value, right.Path, out var extractedRight) ? extractedRight : null;
+            if (value is not null)
             {
                 if (!rightByValue.TryGetValue(value, out var matches))
                     rightByValue[value] = matches = [];
