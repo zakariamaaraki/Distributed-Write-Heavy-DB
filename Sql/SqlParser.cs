@@ -180,6 +180,17 @@ internal sealed class SqlParser
         ExpectKeyword("FROM");
         var table = ExpectTableName();
 
+        SqlJoinClause? join = null;
+        if (MatchKeyword("JOIN"))
+        {
+            var joinTable = ExpectTableName();
+            ExpectKeyword("ON");
+            var leftColumn = ExpectQualifiedColumn();
+            ExpectSymbol("=");
+            var rightColumn = ExpectQualifiedColumn();
+            join = new SqlJoinClause(joinTable, leftColumn, rightColumn);
+        }
+
         var where = SqlWhereClause.All;
 
         if (MatchKeyword("WHERE"))
@@ -193,7 +204,7 @@ internal sealed class SqlParser
             limit = ExpectPositiveNumber();
         }
 
-        return new SqlSelectStatement(table, columns, where, limit);
+        return new SqlSelectStatement(table, columns, where, limit, join);
     }
 
     private IReadOnlyList<string> ParseSelectColumns()
@@ -206,7 +217,7 @@ internal sealed class SqlParser
         var columns = new List<string>();
         do
         {
-            columns.Add(ExpectColumnName());
+            columns.Add(ExpectQualifiedColumn());
         }
         while (MatchSymbol(","));
 
@@ -385,6 +396,20 @@ internal sealed class SqlParser
     private string ExpectIndexName()
     {
         return ExpectIdentifier().ToLowerInvariant();
+    }
+
+    private string ExpectQualifiedColumn()
+    {
+        var first = ExpectIdentifier().ToLowerInvariant();
+        if (!MatchSymbol("."))
+        {
+            if (first is not ("key" or "value")) throw Error("Only key and value columns are supported.");
+            return first;
+        }
+
+        var second = ExpectIdentifier().ToLowerInvariant();
+        if (second is not ("key" or "value")) throw Error("Only key and value columns are supported.");
+        return $"{first}.{second}";
     }
 
     private string ExpectColumnName()

@@ -123,6 +123,13 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> SelectAsync(SqlSelectStatement statement, Guid? transactionId)
     {
+        if (statement.Join is not null)
+        {
+            if (transactionId is not null)
+                throw new SqlExecutionException("JOIN is not supported inside a transaction.");
+            return await SelectJoinAsync(statement);
+        }
+
         IReadOnlyList<KeyValueRow> rows;
         var where = statement.Where;
         var scanLimit = where.ValuePredicate is null ? statement.Limit : 1_000;
@@ -172,6 +179,43 @@ public sealed class SqlEngine
         return SqlExecutionResult.WithRows("SELECT", projectedRows, transactionId);
     }
 
+    private async Task<SqlExecutionResult> SelectJoinAsync(SqlSelectStatement statement)
+    {
+        var join = statement.Join!;
+        if (_database is null)
+            throw new SqlExecutionException("JOIN requires the multi-table database engine.");
+        if (!string.Equals(join.LeftColumn, $"{statement.Table}.key", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(join.RightColumn, $"{join.Table}.key", StringComparison.OrdinalIgnoreCase))
+            throw new SqlExecutionException("Only joins on table.key = table.key are supported.");
+
+        var leftRows = await _database.RangeAsync(statement.Table, null, null, 1_000);
+        var rightRows = await _database.RangeAsync(join.Table, null, null, 1_000);
+        var rightByKey = rightRows.ToLookup(row => row.Key, StringComparer.Ordinal);
+        var rows = new List<IReadOnlyDictionary<string, string>>();
+        foreach (var left in leftRows)
+        {
+            foreach (var right in rightByKey[left.Key])
+            {
+                var projected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var columns = statement.Columns.SequenceEqual(["key", "value"], StringComparer.OrdinalIgnoreCase)
+                    ? [$"{statement.Table}.key", $"{statement.Table}.value", $"{join.Table}.key", $"{join.Table}.value"]
+                    : statement.Columns;
+                foreach (var column in columns)
+                {
+                    var parts = column.Split('.', 2);
+                    if (parts.Length != 2 || (parts[1] != "key" && parts[1] != "value"))
+                        throw new SqlExecutionException("JOIN columns must be qualified, for example users.value.");
+                    var row = string.Equals(parts[0], statement.Table, StringComparison.OrdinalIgnoreCase) ? left :
+                        string.Equals(parts[0], join.Table, StringComparison.OrdinalIgnoreCase) ? right :
+                        throw new SqlExecutionException($"Unknown JOIN table qualifier '{parts[0]}'.");
+                    projected[column] = parts[1] == "key" ? row.Key : row.Value;
+                }
+                rows.Add(projected);
+                if (rows.Count >= Math.Clamp(statement.Limit, 1, 1_000)) return SqlExecutionResult.WithRows("SELECT", rows);
+            }
+        }
+        return SqlExecutionResult.WithRows("SELECT", rows);
+    }
     private async Task<SqlExecutionResult> UpdateAsync(SqlUpdateStatement statement, Guid? transactionId)
     {
         EnsureValidJsonValue(statement.Value);

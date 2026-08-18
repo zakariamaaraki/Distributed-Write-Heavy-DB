@@ -22,6 +22,7 @@ This project is database backed by a write-optimized key/value store.
   keeping the lower-level key/value storage string-based.
 - Support disk-backed B+ tree indexes over JSON `value` documents or dot-path
   properties for equality searches.
+- Support inner equi-joins between tables on matching keys.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
@@ -286,6 +287,30 @@ Current limitations:
 - Transactional reads do not use committed indexes because staged writes must be
   overlaid first.
 
+### SQL JOINs
+
+The SQL engine supports inner equi-joins between two tables when their keys match:
+
+```sql
+SELECT users.value, orders.value
+FROM users
+JOIN orders ON users.key = orders.key
+LIMIT 100
+```
+
+A join returns only matching keys. Columns must be qualified with their table
+name. `SELECT *` returns `users.key`, `users.value`, `orders.key`, and
+`orders.value`. The current implementation scans up to 1,000 rows from each
+input, limits output to `LIMIT` (1-1,000), and does not support joins inside
+transactions.
+
+For example:
+
+```sql
+INSERT INTO users VALUES ('u1', '{"name":"Ada"}')
+INSERT INTO orders VALUES ('u1', '{"item":"Book"}')
+SELECT * FROM users JOIN orders ON users.key = orders.key
+```
 ## HTTP API
 
 - `GET /tables`: list tables.

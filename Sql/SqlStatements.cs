@@ -50,7 +50,10 @@ internal sealed record SqlSelectStatement(
     string Table,
     IReadOnlyList<string> Columns,
     SqlWhereClause Where,
-    int Limit) : SqlStatement("SELECT");
+    int Limit,
+    SqlJoinClause? Join = null) : SqlStatement("SELECT");
+
+internal sealed record SqlJoinClause(string Table, string LeftColumn, string RightColumn);
 
 internal sealed record SqlWhereClause(
     string? Key,

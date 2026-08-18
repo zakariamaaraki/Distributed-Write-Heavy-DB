@@ -367,6 +367,33 @@ public sealed class SqlEngineTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_JoinsTablesOnMatchingKeys()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE orders", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('u1', '{\"name\":\"Ada\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('u2', '{\"name\":\"Grace\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO orders VALUES ('u1', '{\"item\":\"Book\"}')", null));
+
+            var result = await engine.ExecuteAsync(new SqlQueryRequest(
+                "SELECT users.value, orders.value FROM users JOIN orders ON users.key = orders.key LIMIT 10",
+                null));
+
+            Assert.Single(result.Rows);
+            Assert.Equal("{\"name\":\"Ada\"}", result.Rows[0]["users.value"]);
+            Assert.Equal("{\"item\":\"Book\"}", result.Rows[0]["orders.value"]);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);
