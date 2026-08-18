@@ -154,9 +154,10 @@ exists. Create a B+ tree index with `CREATE INDEX index_name ON table_name
 it from committed table data.
 
 This is not a full relational SQL database. Tables do not define custom columns
-yet, and there are no joins or arbitrary predicates; SQL is currently another
-way to call the existing table/key/value operations with optional B+ tree
-indexes for JSON value equality filters.
+yet, and JOIN support is limited to inner equi-joins on matching table keys;
+arbitrary predicates are not supported. SQL is currently another way to call the
+existing table/key/value operations with optional B+ tree indexes for JSON value
+equality filters.
 
 ### B+ Trees and JSON Value Indexes
 
@@ -1001,9 +1002,9 @@ network. Use `/raft/state` on each host port to see which node is leader.
 
 ## Non-Goals
 
-- No full relational SQL layer with schemas, joins, general-purpose secondary
-  indexes, or arbitrary predicates beyond key filters and JSON value equality
-  filters.
+- No full relational SQL layer with custom schemas, general-purpose secondary
+  indexes, or arbitrary predicates beyond key filters, JSON value equality
+  filters, and the supported inner key equi-joins.
 - No dynamic Raft membership changes.
 - No full Raft log replication; followers replicate committed storage changes
   from the leader's durable change log after leader election.
