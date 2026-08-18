@@ -140,6 +140,38 @@ public sealed class ChangeLogServiceTests
         }
     }
 
+    [Fact]
+    public async Task StreamAsync_ReconnectsFromLastAppliedSequence()
+    {
+        var dataPath = CreateTempDataPath();
+
+        try
+        {
+            var service = CreateService(dataPath);
+            await service.PublishAsync([
+                Entry(1, "put", "alpha", "one"),
+                Entry(2, "put", "bravo", "two"),
+                Entry(3, "put", "charlie", "three")
+            ]);
+
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var replay = new List<ChangeLogEntry>();
+            await foreach (var entry in service.StreamAsync(1, cancellation.Token))
+            {
+                replay.Add(entry);
+                if (replay.Count == 2)
+                {
+                    break;
+                }
+            }
+
+            Assert.Equal([2, 3], replay.Select(entry => entry.Sequence));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static ChangeLogService CreateService(string dataPath)
     {
         return new ChangeLogService(new LsmStoreOptions(dataPath, FlushThreshold: 100));

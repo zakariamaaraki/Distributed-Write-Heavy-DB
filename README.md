@@ -449,7 +449,7 @@ Configure it with:
 Every write is appended to a write-ahead log before it is applied to memory.
 On startup, the log is replayed so acknowledged writes are not lost.
 
-The log is reset after the current memtable is flushed to disk.
+The WAL is cleared only after the current memtable has been successfully written to an SSTable. Compaction runs afterward and merges SSTables; WAL deletion does not wait for compaction because the flushed SSTable already contains the records needed for local recovery. If the process crashes before the flush completes, the WAL remains available for replay.
 
 WAL integrity: every new WAL line is wrapped with its JSON payload and an uppercase SHA-256 checksum. On replay, the checksum is verified before the payload is applied; corrupted or partially written entries are ignored. Legacy unwrapped JSON WAL lines remain readable.
 
@@ -463,7 +463,7 @@ left by a crash and is ignored instead of being replayed.
 ### Change Log Stream
 
 Committed writes from all tables are also appended to `data/changelog.log` as
-change-log events. Each event contains the global committed sequence number,
+change-log events. The change log is separate from the WAL: the WAL protects local crash recovery, while the change log provides a durable, ordered source that followers and other consumers can replay. Each event contains the global committed sequence number,
 table, operation, key, value, tombstone flag, and commit timestamp. Direct
 `PUT`/`DELETE`, SQL writes, and transaction commits all publish through the same
 log because they all eventually call the storage engine write path.
@@ -494,8 +494,16 @@ event: change
 data: {"sequence":121,"operation":"put","key":"user:1001","value":"Ada","isDeleted":false,"committedAt":"2026-05-19T12:00:00Z","table":"users"}
 ```
 
-The browser UI at `/changes-console` can replay or subscribe to the same stream
-and display events in a table.
+The browser UI at /changes-console can replay or subscribe to the same stream
+ and display events in a table.
+
+The server sends an SSE comment heartbeat (: heartbeat) every 15 seconds while
+the connection is idle. Heartbeats keep proxies and load balancers from treating
+the connection as inactive; they are comments, not change events, so followers
+ignore them. If the connection closes, a follower reconnects with its last
+successfully applied sequence. The leader then replays only events after that
+sequence before resuming the live stream. A follower records the sequence only
+after applying the event locally.
 
 ### Raft Leader Election
 
@@ -535,7 +543,7 @@ GET {leaderUrl}/changes/stream?fromSequence={lastAppliedChangeSequence}
 ```
 
 The follower first receives missed durable events and then continues with live
-events. Applied changes preserve the leader's change sequence locally so the
+events delivered through the open SSE connection. This lets disconnected followers catch up from disk while connected followers receive new commits without polling. Applied changes preserve the leader's change sequence locally so the
 replica can resume from the same sequence after restart. Change-log events carry
 the table name, so followers create missing tables and apply each event to the
 matching table-local LSM tree.
@@ -820,7 +828,7 @@ Runtime data lives under `data/`:
   next page id, and order.
 - `data/indexes/{index}/pages/page-*.json`: disk-backed B+ tree pages for that
   index.
-- `data/changelog.log`: committed change-log events for replayable subscriptions.
+- `data/changelog.log`: durable committed change-log events used for follower catch-up and live streaming subscriptions.
 - `data/raft-state.json`: persisted Raft term and vote.
 - `data/raft-replication.json`: last leader change sequence applied by a
   follower.
