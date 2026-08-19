@@ -1129,18 +1129,3 @@ The compose cluster exposes:
 Each container advertises its internal Docker DNS URL, such as
 `http://node-a:8080`, so Raft vote and heartbeat RPCs stay inside the compose
 network. Use `/raft/state` on each host port to see which node is leader.
-
-## Non-Goals
-
-- No full relational SQL layer with custom schemas, general-purpose secondary
-  indexes, or arbitrary predicates beyond key filters, JSON value equality
-  filters, and the supported inner key equi-joins.
-- No dynamic Raft membership changes.
-- No full Raft log replication; followers replicate committed storage changes
-  from the leader's durable change log after leader election.
-- No background compaction.
-- No custom binary SSTable format.
-- No configurable isolation levels beyond read-your-own-writes inside a
-  transaction and serialized commit through the affected table store mutex.
-
-Those can be added later, but they would make the first version harder to read.
