@@ -53,6 +53,72 @@ for the ownership, bootstrap, failure, and rebalancing protocol.
 Distributed transactions are not implemented: a transaction that writes more
 than one table cannot be atomically committed across table leaders. Cross-table
 JOINs remain read-only.
+## Router Process
+
+Each database node can run with a companion `Router` process. The Router is an
+HTTP reverse proxy that keeps pooled, long-lived connections to the database
+nodes and routes requests to the current leader for the requested table.
+
+The Router:
+
+- Discovers a table leader through `/raft/tables/{table}/state`.
+- Caches the leader URL per table to avoid discovery on every request.
+- Forwards REST, SQL, and transaction requests while preserving method, headers,
+  query string, and request body.
+- Invalidates its cached leader after a leader-rejection or redirect and retries
+  discovery once.
+- Uses HTTP keep-alive/connection pooling and HTTP/2 connection support so the
+  Router does not create a new TCP connection for every request.
+- Falls back to its configured database node when no leader can be discovered.
+
+Run it with:
+
+```powershell
+$env:ROUTER_DATABASE_URL = 'http://node-a:8080'
+$env:ROUTER_PEERS = 'node-b=http://node-b:8080,node-c=http://node-c:8080'
+dotnet run --project Router/Router.csproj --urls http://localhost:9080
+```
+
+Clients should connect to the Router port rather than selecting a table leader
+manually. The Router does not implement distributed transactions; cross-table
+transactions remain rejected by the database.
+### Calling the database through the Router
+
+When using Docker Compose, send requests to the Router port instead of the database port:
+
+```text
+Router A: http://localhost:9081
+Router B: http://localhost:9082
+Router C: http://localhost:9083
+```
+
+For example, create a table and write/read a value through Router A:
+
+```powershell
+curl.exe -X POST http://localhost:9081/tables/users
+curl.exe -X PUT http://localhost:9081/kv/users/alice `
+  -H "Content-Type: application/json" `
+  -d '{"name":"Alice","active":true}'
+curl.exe http://localhost:9081/kv/users/alice
+```
+
+The request can enter through any Router. This request sent to Router C is forwarded to whichever node is currently the leader of `users`:
+
+```powershell
+curl.exe -X PUT http://localhost:9083/kv/users/bob `
+  -H "Content-Type: application/json" `
+  -d '{"name":"Bob"}'
+```
+
+SQL is also sent to the Router. The Router identifies the table from the SQL statement and forwards the request to that table's leader:
+
+```powershell
+curl.exe -X POST http://localhost:9081/sql `
+  -H "Content-Type: application/json" `
+  -d '{"sql":"SELECT * FROM users"}'
+```
+
+Applications should use the Router URL as their database endpoint and do not need to know the current table leader. If a leader election changes ownership, the Router refreshes its cached route automatically. Database ports (`8080`) remain node-to-node and direct database endpoints; client traffic should normally use the Router ports.
 ## Architecture
 
 ### High-level architecture

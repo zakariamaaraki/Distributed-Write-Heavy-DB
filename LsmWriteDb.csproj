@@ -8,6 +8,9 @@
 
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="Router\**\*.cs" />
+    <Content Remove="Router\**\*" />
+    <None Remove="Router\**\*" />
     <Content Remove="tests\**\*" />
     <None Remove="tests\**\*" />
   </ItemGroup>

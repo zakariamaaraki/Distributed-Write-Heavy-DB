@@ -53,3 +53,45 @@ services:
       Raft__Peers__0__Url: http://node-a:8080
       Raft__Peers__1__NodeId: node-b
       Raft__Peers__1__Url: http://node-b:8080
+
+  router-a:
+    build:
+      context: ./Router
+    environment:
+      ROUTER_DATABASE_URL: http://node-a:8080
+      ROUTER_PEERS: node-b=http://node-b:8080,node-c=http://node-c:8080
+      ASPNETCORE_URLS: http://+:9080
+    ports:
+      - "9081:9080"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+
+  router-b:
+    build:
+      context: ./Router
+    environment:
+      ROUTER_DATABASE_URL: http://node-b:8080
+      ROUTER_PEERS: node-a=http://node-a:8080,node-c=http://node-c:8080
+      ASPNETCORE_URLS: http://+:9080
+    ports:
+      - "9082:9080"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+
+  router-c:
+    build:
+      context: ./Router
+    environment:
+      ROUTER_DATABASE_URL: http://node-c:8080
+      ROUTER_PEERS: node-a=http://node-a:8080,node-b=http://node-b:8080
+      ASPNETCORE_URLS: http://+:9080
+    ports:
+      - "9083:9080"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
