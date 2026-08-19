@@ -157,6 +157,10 @@ public sealed class TransactionManager
         return new TransactionRangeRead(FoundTransaction: true, rows);
     }
 
+    public IReadOnlyList<string>? GetTables(Guid transactionId)
+    {
+        return _transactions.TryGetValue(transactionId, out var buffer) ? buffer.Tables() : null;
+    }
     public async Task<TransactionCommit?> CommitAsync(Guid transactionId)
     {
         if (!_transactions.TryGetValue(transactionId, out var buffer))
@@ -333,6 +337,11 @@ internal sealed class TransactionBuffer
         }
     }
 
+    public IReadOnlyList<string> Tables()
+    {
+        lock (_mutex)
+            return _writes.Values.Select(write => write.Table).Distinct(StringComparer.Ordinal).ToList();
+    }
     public bool TrySnapshotWrites(out IReadOnlyList<TransactionWrite> writes)
     {
         lock (_mutex)

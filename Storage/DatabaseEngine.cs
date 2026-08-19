@@ -9,6 +9,8 @@ namespace LsmWriteDb.Storage;
 public static class TableNames
 {
     public const string Default = "kv";
+    public const string Ownership = "__table_ownership";
+    public static bool IsInternal(string table) => table.StartsWith("__", StringComparison.Ordinal);
 
     public static string Normalize(string table)
     {
@@ -121,6 +123,7 @@ public sealed class DatabaseEngine
 
             var tableNames = await ReadCatalogAsync(cancellationToken);
             tableNames.Add(TableNames.Default);
+            tableNames.Add(TableNames.Ownership);
 
             foreach (var directory in Directory.EnumerateDirectories(_tablesPath))
             {
@@ -152,11 +155,18 @@ public sealed class DatabaseEngine
         await EnsureInitializedAsync(cancellationToken);
 
         return _stores.Keys
+            .Where(name => !TableNames.IsInternal(name))
             .OrderBy(name => name, StringComparer.Ordinal)
             .Select(name => new TableInfo(name))
             .ToList();
     }
 
+    internal async Task<IReadOnlyList<TableInfo>> ListAllTablesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return _stores.Keys.OrderBy(name => name, StringComparer.Ordinal)
+            .Select(name => new TableInfo(name)).ToList();
+    }
     public async Task<bool> CreateTableAsync(string table, CancellationToken cancellationToken = default)
     {
         var normalized = TableNames.Normalize(table);
@@ -251,6 +261,14 @@ public sealed class DatabaseEngine
         return await store.GetAsync(key);
     }
 
+    public async Task<TableSnapshot> GetSnapshotAsync(string table)
+    {
+        var normalized = TableNames.Normalize(table);
+        var store = await GetStoreAsync(normalized);
+        var rows = await store.ScanAsync();
+        var stats = await store.GetStatsAsync();
+        return new TableSnapshot(normalized, stats.LastSequence, rows);
+    }
     public async Task<IReadOnlyList<KeyValueRow>> RangeAsync(string table, string? start, string? end, int limit)
     {
         var store = await GetStoreAsync(table);
@@ -321,7 +339,7 @@ public sealed class DatabaseEngine
         await EnsureInitializedAsync();
 
         var stats = new List<TableStats>();
-        foreach (var table in _stores.Keys.OrderBy(name => name, StringComparer.Ordinal))
+        foreach (var table in _stores.Keys.Where(name => !TableNames.IsInternal(name)).OrderBy(name => name, StringComparer.Ordinal))
         {
             stats.Add(await GetTableStatsAsync(table));
         }

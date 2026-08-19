@@ -4,11 +4,12 @@ namespace LsmWriteDb.Raft;
 
 public sealed class RaftNode
 {
-    private readonly RaftOptions _options;
+    private RaftOptions _options;
     private readonly RaftStateStore _stateStore;
     private readonly HttpClient _httpClient;
     private readonly object _mutex = new();
     private readonly Random _random = new();
+    private readonly string? _table;
 
     private RaftRole _role = RaftRole.Follower;
     private long _currentTerm;
@@ -18,13 +19,31 @@ public sealed class RaftNode
     private bool _started;
     private long _lastAppliedChangeSequence;
 
-    public RaftNode(RaftOptions options, RaftStateStore stateStore, HttpClient httpClient)
+    public RaftNode(RaftOptions options, RaftStateStore stateStore, HttpClient httpClient, string? table = null)
     {
         _options = options;
         _stateStore = stateStore;
         _httpClient = httpClient;
+        _table = string.IsNullOrWhiteSpace(table) ? null : Storage.TableNames.Normalize(table);
     }
 
+    public void UpdatePeers(IReadOnlyList<RaftPeerOptions> peers)
+    {
+        lock (_mutex)
+        {
+            _options = new RaftOptions
+            {
+                Enabled = _options.Enabled,
+                NodeId = _options.NodeId,
+                PublicUrl = _options.PublicUrl,
+                ElectionTimeoutMinMilliseconds = _options.ElectionTimeoutMinMilliseconds,
+                ElectionTimeoutMaxMilliseconds = _options.ElectionTimeoutMaxMilliseconds,
+                HeartbeatIntervalMilliseconds = _options.HeartbeatIntervalMilliseconds,
+                ReplicationReconnectDelayMilliseconds = _options.ReplicationReconnectDelayMilliseconds,
+                Peers = peers.ToList()
+            };
+        }
+    }
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)
@@ -271,7 +290,7 @@ public sealed class RaftNode
         try
         {
             using var response = await _httpClient.PostAsJsonAsync(
-                $"{TrimUrl(peer.Url)}/raft/request-vote",
+                $"{TrimUrl(peer.Url)}{RaftPath("request-vote")}",
                 new RaftRequestVoteRequest(term, _options.NodeId),
                 cancellationToken);
 
@@ -312,7 +331,7 @@ public sealed class RaftNode
             try
             {
                 using var response = await _httpClient.PostAsJsonAsync(
-                    $"{TrimUrl(peer.Url)}/raft/append-entries",
+                    $"{TrimUrl(peer.Url)}{RaftPath("append-entries")}",
                     new RaftAppendEntriesRequest(status.CurrentTerm, _options.NodeId),
                     cancellationToken);
 
@@ -405,6 +424,11 @@ public sealed class RaftNode
         }
 
         return _options.Peers.FirstOrDefault(peer => string.Equals(peer.NodeId, _leaderId, StringComparison.Ordinal))?.Url;
+    }
+
+    private string RaftPath(string operation)
+    {
+        return _table is null ? $"/raft/{operation}" : $"/raft/tables/{_table}/{operation}";
     }
 
     private static string TrimUrl(string url)

@@ -144,6 +144,30 @@ jobs:
           docker compose -f docker-compose.yml logs
           exit 1
 
+      - name: Verify per-table leaders and rebalance endpoint
+        run: |
+          set -euo pipefail
+
+          for table in users orders; do
+            curl -fsS -X PUT "http://localhost:8081/tables/${table}" >/dev/null || true
+            for i in $(seq 1 60); do
+              leaders=0
+              for port in 8081 8082 8083; do
+                role="$(curl -fsS "http://localhost:${port}/raft/tables/${table}/state" | jq -r '.role')"
+                if [ "$role" = "Leader" ] || [ "$role" = "2" ]; then
+                  leaders=$((leaders + 1))
+                fi
+              done
+              if [ "$leaders" -eq 1 ]; then break; fi
+              sleep 1
+            done
+            test "$leaders" -eq 1
+          done
+
+          curl -fsS -X POST "http://localhost:8081/raft/rebalance" | jq -e 'length >= 2' >/dev/null
+          curl -fsS -X POST "http://localhost:8081/raft/membership/register" \
+            -H 'Content-Type: application/json' \
+            -d '{"nodeId":"node-c","url":"http://node-c:8080"}' | jq -e 'length >= 2' >/dev/null
       - name: Stop cluster
         if: always()
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans

@@ -23,18 +23,68 @@ This project is database backed by a write-optimized key/value store.
 - Support disk-backed B+ tree indexes over JSON `value` documents or dot-path
   properties for equality searches.
 - Support inner equi-joins between tables on matching keys.
+- Elect one leader per table with multiple followers and rebalance table ownership when replicas join or leave.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
-- Elect one write leader with Raft-style terms, votes, and heartbeats while
-  allowing followers to serve reads and replicate from the leader's change log.
+- Run independent Raft elections per table, with one leader and multiple followers per table.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
-## High-Level Architecture
+## Per-Table Leadership
 
-![High-level architecture of the distributed LSM database](./docs/high-level-architecture.svg?raw=true)
+The cluster uses an independent Raft group for each logical table. A node can be
+leader for `users` while following `orders`, allowing write load to be spread
+across replicas. Each table leader accepts writes for that table; table
+followers reject writes with the current table leader URL and replicate that
+table's committed change stream.
 
+Ownership records are stored in the internal `__table_ownership` table. The
+record contains the table term, leader, members, and rebalance identifier. The
+internal table is hidden from normal table listings and is bootstrapped with the
+same table-leadership mechanism.
+
+When a node joins or becomes unavailable, the ownership planner selects a new
+member set and table leader. A table election requires a majority of that
+table's members. A table without a majority becomes unavailable for writes to
+avoid split-brain behavior. See [design/table-leadership.md](./design/table-leadership.md)
+for the ownership, bootstrap, failure, and rebalancing protocol.
+
+Distributed transactions are not implemented: a transaction that writes more
+than one table cannot be atomically committed across table leaders. Cross-table
+JOINs remain read-only.
+## Architecture
+
+### High-level architecture
+
+![High-level per-table leadership architecture](./docs/high-level-architecture.svg?raw=true)
+
+The cluster has independent leadership groups per table. A node may lead one
+table while following another. The internal `__table_ownership` table records
+which nodes currently own each table, the table term, leader URL, and rebalance
+identifier.
+
+### Low-level table flow
+
+![Low-level table election, write, and bootstrap flow](./docs/low-level-table-architecture.svg?raw=true)
+
+Writes first pass through the table-specific role guard. The table leader
+appends to that table's WAL and memtable, then publishes a committed event.
+Followers bootstrap with a table snapshot and continue from its sequence through
+the SSE change stream. Each follower filters the shared change log by table.
+
+### Supported architecture
+
+- Independent Raft terms, votes, heartbeats, and elections per table.
+- Multiple followers per table and different leaders for different tables.
+- Table-specific write rejection with the current leader URL.
+- Runtime peer registration through `POST /raft/membership/register`.
+- Health-based automatic and explicit rebalancing through `POST /raft/rebalance`.
+- Internal `__table_ownership` metadata storage, hidden from public table lists.
+- Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
+- Per-table applied sequence tracking and SSE reconnection.
+- Table-local WALs and shared database change-log events.
+- Cross-table distributed transactions are intentionally unsupported.
 ## Data Model
 
 The database stores named tables. Each table is an independent key/value LSM
@@ -333,6 +383,9 @@ LIMIT 100
 - `GET /tables/{table}/kv/range?start=a&end=z&limit=100`: return table keys
   in sorted order.
 - `GET /tables/{table}/stats`: inspect one table.
+- `GET /tables/{table}/snapshot`: bootstrap a follower from a table snapshot and applied sequence.
+- `POST /raft/rebalance`: probe configured peers and persist a new healthy ownership assignment.
+- `POST /raft/membership/register`: register a peer and trigger ownership rebalancing.
 - `PUT /kv/{key}`: create or update a value in the default `kv` table.
 - `GET /kv/{key}`: fetch a single value from the default `kv` table.
 - `DELETE /kv/{key}`: delete a key from the default `kv` table.

@@ -27,9 +27,12 @@ builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpa
 builder.Services.AddSingleton<RaftStateStore>();
 builder.Services.AddSingleton<RaftNode>();
 builder.Services.AddSingleton<RaftRoleGuard>();
+builder.Services.AddSingleton<TableRaftCoordinator>();
+builder.Services.AddSingleton<TableRaftRoleGuard>();
 builder.Services.Configure<TcpSqlOptions>(builder.Configuration.GetSection("TcpSql"));
 builder.Services.AddHostedService<RaftElectionService>();
-builder.Services.AddHostedService<RaftChangeLogReplicationService>();
+builder.Services.AddHostedService<TableRaftReplicationService>();
+builder.Services.AddHostedService<TableRaftElectionService>();
 builder.Services.AddHostedService<TcpSqlServer>();
 
 var app = builder.Build();
@@ -48,5 +51,6 @@ app.MapSqlEndpoints();
 app.MapSqlConsoleEndpoints();
 app.MapChangeLogEndpoints();
 app.MapRaftEndpoints();
+app.MapTableRaftEndpoints();
 
 app.Run();

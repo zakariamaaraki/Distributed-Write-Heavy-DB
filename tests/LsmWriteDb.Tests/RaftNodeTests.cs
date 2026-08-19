@@ -152,6 +152,58 @@ public sealed class RaftNodeTests
         }
     }
 
+    [Fact]
+    public void TableOwnershipPlanner_DistributesTablesDeterministicallyAndPreservesHealthyLeaders()
+    {
+        var nodes = new[]
+        {
+            new RaftPeerOptions { NodeId = "node-a", Url = "http://node-a" },
+            new RaftPeerOptions { NodeId = "node-b", Url = "http://node-b" },
+            new RaftPeerOptions { NodeId = "node-c", Url = "http://node-c" }
+        };
+
+        var first = TableOwnershipPlanner.Rebalance(["users", "orders"], nodes, 2, now: DateTimeOffset.UnixEpoch);
+        var second = TableOwnershipPlanner.Rebalance(["orders", "users"], nodes, 2, now: DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(first.Select(record => record.Table), second.Select(record => record.Table));
+        Assert.Equal(first.Select(record => record.LeaderId), second.Select(record => record.LeaderId));
+        Assert.All(first, record => Assert.Equal(2, record.Members.Count));
+
+        var previous = first.ToDictionary(record => record.Table);
+        var moved = TableOwnershipPlanner.Rebalance(["users", "orders"], nodes, 2, previous, DateTimeOffset.UnixEpoch);
+        Assert.Equal(previous["users"].LeaderId, moved.Single(record => record.Table == "users").LeaderId);
+        Assert.Equal(previous["orders"].LeaderId, moved.Single(record => record.Table == "orders").LeaderId);
+    }
+    [Fact]
+    public async Task TableRaftCoordinator_PersistsOwnershipForAnElectedTableLeader()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var options = new LsmStoreOptions(dataPath, 100);
+            var database = new DatabaseEngine(options, new ChangeLogService(options));
+            await database.InitializeAsync();
+            var raftOptions = new RaftOptions
+            {
+                Enabled = true,
+                NodeId = "node-a",
+                PublicUrl = "http://node-a"
+            };
+            using var httpClient = new HttpClient();
+            var coordinator = new TableRaftCoordinator(raftOptions, options, httpClient, database);
+
+            await coordinator.EnsureTableAsync("users");
+
+            var ownership = await database.GetAsync(TableNames.Ownership, "users");
+            Assert.NotNull(ownership);
+            Assert.Contains("node-a", ownership!.Value);
+            Assert.Equal(RaftRole.Leader, coordinator.GetStatus("users").Role);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static RaftNode CreateNode(string dataPath, RaftOptions raftOptions)
     {
         return new RaftNode(

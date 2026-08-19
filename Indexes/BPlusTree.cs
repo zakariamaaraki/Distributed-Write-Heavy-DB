@@ -279,19 +279,38 @@ internal sealed class DiskBackedBPlusTree
     {
         Directory.CreateDirectory(_pagesDirectory);
         var pagePath = PagePath(page.PageId);
-        var tempPath = pagePath + ".tmp";
+        var tempPath = pagePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(tempPath, JsonSerializer.Serialize(page, JsonOptions), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.Move(tempPath, pagePath, overwrite: true);
+        ReplaceFileWithRetry(tempPath, pagePath);
     }
 
     private void WriteMetadata()
     {
         Directory.CreateDirectory(_directory);
-        var tempPath = _metadataPath + ".tmp";
+        var tempPath = _metadataPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(tempPath, JsonSerializer.Serialize(_metadata, JsonOptions), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.Move(tempPath, _metadataPath, overwrite: true);
+        ReplaceFileWithRetry(tempPath, _metadataPath);
     }
 
+    private static void ReplaceFileWithRetry(string tempPath, string destinationPath)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(tempPath, destinationPath, overwrite: true);
+                return;
+            }
+            catch (UnauthorizedAccessException) when (attempt < 8)
+            {
+                Thread.Sleep(25 * (attempt + 1));
+            }
+            catch (IOException) when (attempt < 8)
+            {
+                Thread.Sleep(25 * (attempt + 1));
+            }
+        }
+    }
     private string PagePath(long pageId)
     {
         return Path.Combine(_pagesDirectory, $"page-{pageId:D20}.json");

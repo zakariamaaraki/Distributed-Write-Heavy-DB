@@ -9,11 +9,12 @@ public static class TableEndpoints
     {
         app.MapGet("/tables", async (DatabaseEngine db) => Results.Ok(await db.ListTablesAsync()));
 
-        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, RaftRoleGuard raft) =>
+        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftRoleGuard tableRaft) =>
         {
-            if (!raft.CanAcceptWrites)
+            var targetTable = table;
+            if (!tableRaft.CanAcceptWrites(targetTable))
             {
-                return raft.WriteRejectedResult();
+                return tableRaft.WriteRejectedResult(targetTable);
             }
 
             try
@@ -31,6 +32,13 @@ public static class TableEndpoints
 
         MapKeyValueRoutes(app, "/kv", TableNames.Default);
         MapKeyValueRoutes(app, "/tables/{table}/kv", tableName: null);
+
+        app.MapGet("/tables/{table}/snapshot", async (string table, DatabaseEngine db) =>
+        {
+            try { return Results.Ok(await db.GetSnapshotAsync(table)); }
+            catch (TableNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        });
 
         app.MapGet("/stats", async (DatabaseEngine db) => Results.Ok(await db.GetStatsAsync()));
 
@@ -104,11 +112,12 @@ public static class TableEndpoints
             string key,
             [FromBody] PutValueRequest request,
             DatabaseEngine db,
-            RaftRoleGuard raft) =>
+            TableRaftRoleGuard tableRaft) =>
         {
-            if (!raft.CanAcceptWrites)
+            var targetTable = tableName ?? table ?? TableNames.Default;
+            if (!tableRaft.CanAcceptWrites(targetTable))
             {
-                return raft.WriteRejectedResult();
+                return tableRaft.WriteRejectedResult(targetTable);
             }
 
             if (string.IsNullOrWhiteSpace(key))
@@ -140,11 +149,12 @@ public static class TableEndpoints
             string? table,
             string key,
             DatabaseEngine db,
-            RaftRoleGuard raft) =>
+            TableRaftRoleGuard tableRaft) =>
         {
-            if (!raft.CanAcceptWrites)
+            var targetTable = tableName ?? table ?? TableNames.Default;
+            if (!tableRaft.CanAcceptWrites(targetTable))
             {
-                return raft.WriteRejectedResult();
+                return tableRaft.WriteRejectedResult(targetTable);
             }
 
             if (string.IsNullOrWhiteSpace(key))

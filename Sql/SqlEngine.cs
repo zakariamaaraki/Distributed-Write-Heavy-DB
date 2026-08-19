@@ -12,6 +12,7 @@ public sealed class SqlEngine
     private readonly LsmStore? _singleStore;
     private readonly TransactionManager _transactions;
     private readonly RaftRoleGuard? _roleGuard;
+    private readonly TableRaftRoleGuard? _tableRoleGuard;
 
     public SqlEngine(LsmStore store, TransactionManager transactions)
         : this(store, transactions, roleGuard: null)
@@ -30,11 +31,12 @@ public sealed class SqlEngine
     {
     }
 
-    public SqlEngine(DatabaseEngine database, TransactionManager transactions, RaftRoleGuard? roleGuard)
+    public SqlEngine(DatabaseEngine database, TransactionManager transactions, RaftRoleGuard? roleGuard, TableRaftRoleGuard? tableRoleGuard = null)
     {
         _database = database;
         _transactions = transactions;
         _roleGuard = roleGuard;
+        _tableRoleGuard = tableRoleGuard;
     }
 
     public async Task<SqlExecutionResult> ExecuteAsync(SqlQueryRequest request)
@@ -47,7 +49,10 @@ public sealed class SqlEngine
         var statement = SqlParser.Parse(request.Query);
         if (statement is not SqlSelectStatement)
         {
-            _roleGuard?.EnsureLeader();
+            if (_tableRoleGuard is not null && statement is not SqlBeginStatement and not SqlCommitStatement and not SqlRollbackStatement)
+                _tableRoleGuard.EnsureLeader(GetStatementTable(statement));
+            else
+                _roleGuard?.EnsureLeader();
         }
 
         return statement switch
@@ -65,6 +70,18 @@ public sealed class SqlEngine
         };
     }
 
+    private static string GetStatementTable(SqlStatement statement)
+    {
+        return statement switch
+        {
+            SqlCreateTableStatement create => create.Table,
+            SqlCreateIndexStatement create => create.Table,
+            SqlInsertStatement insert => insert.Table,
+            SqlUpdateStatement update => update.Table,
+            SqlDeleteStatement delete => delete.Table,
+            _ => TableNames.Default
+        };
+    }
     private SqlExecutionResult Begin()
     {
         var transaction = _transactions.Begin();
@@ -78,7 +95,13 @@ public sealed class SqlEngine
     private async Task<SqlExecutionResult> CommitAsync(Guid? transactionId)
     {
         var id = RequireTransactionId(transactionId, "COMMIT");
-        var commit = await _transactions.CommitAsync(id);
+        var tables = _transactions.GetTables(id);
+        if (tables is null)
+            throw TransactionNotFound();
+        if (_tableRoleGuard is not null && tables.Count > 1)
+            throw new SqlExecutionException("Distributed transactions across multiple tables are not supported.");
+        if (_tableRoleGuard is not null && tables.Count == 1)
+            _tableRoleGuard.EnsureLeader(tables[0]);        var commit = await _transactions.CommitAsync(id);
         if (commit is null)
         {
             throw TransactionNotFound();
