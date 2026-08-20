@@ -103,6 +103,18 @@ public sealed class DistributedTransactionManager
         return _transactions.ContainsKey(id) ? Info(id, "active") : null;
     }
 
+    public async Task<IReadOnlySet<string>?> ResolveParticipantUrlsAsync(IReadOnlyList<DistributedWrite> writes, CancellationToken cancellationToken)
+    {
+        var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var table in writes.Select(write => write.Table).Distinct(StringComparer.Ordinal))
+        {
+            var url = await FindLeaderAsync(table, cancellationToken);
+            if (url is null) return null;
+            urls.Add(url.TrimEnd('/').ToLowerInvariant());
+        }
+        return urls;
+    }
+
     public async Task<DistributedTransactionInfo?> CommitAsync(Guid id, CancellationToken cancellationToken)
     {
         if (!_transactions.TryGetValue(id, out var buffer)) return null;

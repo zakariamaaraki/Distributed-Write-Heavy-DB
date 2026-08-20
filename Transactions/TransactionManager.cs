@@ -157,6 +157,13 @@ public sealed class TransactionManager
         return new TransactionRangeRead(FoundTransaction: true, rows);
     }
 
+    public IReadOnlyList<StoreWriteOperation>? GetOperations(Guid transactionId)
+    {
+        return _transactions.TryGetValue(transactionId, out var buffer) && buffer.TrySnapshotWrites(out var writes)
+            ? writes.Select(write => write.ToStoreOperation()).ToList()
+            : null;
+    }
+
     public IReadOnlyList<string>? GetTables(Guid transactionId)
     {
         return _transactions.TryGetValue(transactionId, out var buffer) ? buffer.Tables() : null;

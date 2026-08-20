@@ -124,6 +124,27 @@ dotnet run --project Router/Router.csproj --urls http://localhost:9080
 
 Clients should connect to the Router port rather than selecting a table leader
 manually. The Router forwards distributed transaction requests to a coordinator; the coordinator then contacts each affected table leader.
+### Monitoring page
+
+Open the Router monitoring page at `/monitoring` (for example, `http://localhost:9081/monitoring`). It refreshes every three seconds and displays:
+
+- configured nodes and reachability;
+- each discovered table;
+- the role, term, and leader reported by every node for each table;
+- ownership changes during elections and rebalancing.
+
+The page uses `GET /monitoring/api/status` for its live JSON data. It is a Router-local operational view and does not change database state.
+### SQL console through the Router
+
+The Router exposes the same ergonomic SQL console as the database node. Open it through the Router instead of a database port:
+
+```text
+http://localhost:9081/sql-console
+http://localhost:9082/sql-console
+http://localhost:9083/sql-console
+```
+
+The Router serves the console page and its JavaScript/CSS assets, then forwards the console's `POST /sql` requests. It reads the table names from the SQL statement and sends each request to the current leader for the referenced table. The browser therefore stays connected to the Router while table leadership and replica ownership remain internal cluster details.
 ### Calling the database through the Router
 
 When using Docker Compose, send requests to the Router port instead of the database port:
@@ -179,6 +200,12 @@ The client API is:
 - `GET /distributed-transactions/metrics`: inspect 2PC phase counters and prepared/active counts.
 
 A successful path is: discover all leaders → prepare every participant → commit every participant. If discovery, prepare, or a prepare timeout fails, already-prepared participants receive abort and no staged value becomes visible. If a failure occurs after prepare has succeeded, 2PC can enter an `in-doubt` state: the coordinator must recover the decision before participants can safely finish. Prepared state and coordinator decisions are journaled, idempotent phase retries are supported, and abandoned coordinator transactions are expired automatically. The complete protocol and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
+### Transparent SQL promotion
+
+SQL transactions keep the normal BEGIN, statement, and COMMIT contract. A one-table transaction uses the local path. When staged writes target tables whose leaders are on different nodes, COMMIT automatically promotes the write set to the distributed coordinator and runs 2PC. Multiple tables led by the same node remain a local commit. Applications do not need a separate distributed transaction API or special SQL syntax.
+
+Example: BEGIN, insert into user, insert into account, then COMMIT. The coordinator discovers both table leaders, prepares both participants, and commits both batches.
+
 ### 2PC happy path
 
 ![2PC happy path](./docs/distributed-transaction-happy-path.svg?raw=true)

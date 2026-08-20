@@ -92,3 +92,10 @@ authentication or authorization. Production deployments should place TLS and the
 required client authentication at the Router or an upstream gateway, restrict peer
 connectivity, and configure request, connection, and retry timeouts appropriate for
 the workload.
+
+## Monitoring
+
+The Router serves `/monitoring`, a browser page that polls `/monitoring/api/status` every three seconds. It aggregates configured node reachability, table discovery, and each node's table Raft role, term, leader id, and leader URL. This gives operators a live view of per-table ownership during elections and rebalancing without routing or mutating data.
+## SQL console routing
+
+The Router exposes the database's existing SQL console at `/sql-console`. The page and its static assets are served through the Router, while browser `POST /sql` calls are table-routed by inspecting the SQL table reference and resolving that table's current leader. Users keep one Router URL and do not need to select a database node manually.

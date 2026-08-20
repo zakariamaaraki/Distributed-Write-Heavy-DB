@@ -137,3 +137,9 @@ already-prepared participants. After the committing decision is journaled, a los
 response is not treated as an abort: the result is `in-doubt`, and recovery retries
 the decision. This preserves the 2PC rule that a prepared participant must not
 unilaterally choose abort after the coordinator may have chosen commit.
+
+## Transparent SQL promotion
+
+The SQL engine keeps the normal BEGIN, statement, and COMMIT contract. It exports the staged write set only at commit time. If all staged tables resolve to the same leader node, the existing local transaction path is used. If they resolve to different leader nodes, the engine creates an internal distributed transaction, copies the staged operations into it, and invokes leader discovery, prepare, commit, abort, journaling, and recovery. The SQL transaction id remains the client-visible id.
+
+A failed prepare returns an SQL error and aborts prepared participants. A phase-two failure returns an in-doubt SQL execution error.
