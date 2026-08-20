@@ -2,6 +2,14 @@
 
 This project is database backed by a write-optimized key/value store.
 
+## Reading order
+
+
+
+This document is organized from the distributed architecture down to the storage engine: topology and ownership come first, followed by transaction semantics, client APIs, internal components, read/write paths, and on-disk layout.
+
+
+
 ## Goals
 
 - Optimize for frequent writes.
@@ -34,6 +42,39 @@ This project is database backed by a write-optimized key/value store.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
+## Architecture
+
+### High-level architecture
+
+![High-level per-table leadership architecture](./docs/high-level-architecture.svg?raw=true)
+
+The cluster has independent leadership groups per table. A node may lead one
+table while following another. The internal `__table_ownership` table records
+which nodes currently own each table, the table term, leader URL, and rebalance
+identifier.
+
+### Low-level table flow
+
+![Low-level table election, write, and bootstrap flow](./docs/low-level-table-architecture.svg?raw=true)
+
+Writes first pass through the table-specific role guard. The table leader
+appends to that table's WAL and memtable, then publishes a committed event.
+Followers bootstrap with a table snapshot and continue from its sequence through
+the SSE change stream. Each follower filters the shared change log by table.
+
+### Supported architecture
+
+- Independent Raft terms, votes, heartbeats, and elections per table.
+- Multiple followers per table and different leaders for different tables.
+- Table-specific write rejection with the current leader URL.
+- Runtime peer registration through `POST /raft/membership/register`.
+- Health-based automatic and explicit rebalancing through `POST /raft/rebalance`.
+- Internal `__table_ownership` metadata storage, hidden from public table lists.
+- Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
+- Per-table applied sequence tracking and SSE reconnection.
+- Table-local WALs and shared database change-log events.
+- Distributed transaction coordination uses two-phase commit across the affected table leaders.
+
 ## Per-Table Leadership
 
 The cluster uses an independent Raft group for each logical table. A node can be
@@ -54,46 +95,7 @@ avoid split-brain behavior. See [design/table-leadership.md](./design/table-lead
 for the ownership, bootstrap, failure, and rebalancing protocol.
 
 Distributed transactions use a coordinator-driven two-phase commit protocol across table leaders. Cross-table JOINs remain read-only.
-## Distributed transactions
 
-Distributed transactions are supported when one transaction writes to multiple tables. A coordinator groups the staged writes by table, discovers each table leader, runs the prepare phase on every participant, and sends commit only after every participant has acknowledged prepare. Each participant applies its batch through the normal WAL, memtable, index, and change-log path.
-
-![Distributed transaction two-phase commit](./docs/distributed-transaction-2pc.svg?raw=true)
-
-The client API is:
-
-- `POST /distributed-transactions`: begin a distributed transaction.
-- `PUT /distributed-transactions/{id}/writes`: stage `{ table, key, value, isDeleted }`.
-- `POST /distributed-transactions/{id}/commit`: run 2PC and return `committed`, `aborted`, or `in-doubt`.
-- `DELETE /distributed-transactions/{id}`: abort the coordinator transaction.
-- `GET /distributed-transactions/{id}`: inspect durable transaction state.
-- `POST /distributed-transactions/{id}/recover`: request recovery/status evaluation.
-- `GET /distributed-transactions/metrics`: inspect 2PC phase counters and prepared/active counts.
-
-A successful path is: discover all leaders → prepare every participant → commit every participant. If discovery, prepare, or a prepare timeout fails, already-prepared participants receive abort and no staged value becomes visible. If a failure occurs after prepare has succeeded, 2PC can enter an `in-doubt` state: the coordinator must recover the decision before participants can safely finish. Prepared state and coordinator decisions are journaled, idempotent phase retries are supported, and abandoned coordinator transactions are expired automatically. The complete protocol and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
-### 2PC happy path
-
-![2PC happy path](./docs/distributed-transaction-happy-path.svg?raw=true)
-
-1. The Router sends the transaction request to a coordinator.
-2. The coordinator groups writes by table and discovers each table leader.
-3. It sends `prepare` to every participant. Participants journal the write set but do not expose it to reads.
-4. After all prepare acknowledgements, the coordinator journals `committing`.
-5. It sends `commit` to every participant. Each participant uses the normal WAL, memtable, index, and change-log path.
-6. The coordinator returns `committed` only after all participants acknowledge.
-
-### 2PC failure path and recovery
-
-![2PC failure path](./docs/distributed-transaction-failure-path.svg?raw=true)
-
-- Failure during leader discovery or prepare: already-prepared participants receive abort and the result is `aborted`.
-- Failure after prepare: the coordinator returns `in-doubt`; prepared participants do not guess whether to commit or abort.
-- Participant restart: its journal reloads prepared data and automatically replays journaled committing decisions.
-- Repeated prepare or commit: requests are idempotent and return the existing decision.
-- Abandoned active transactions: the background cleanup service expires them after one hour.
-- Operational recovery: query `GET /distributed-transactions/{id}`, call `POST /distributed-transactions/{id}/recover`, and inspect `GET /distributed-transactions/metrics`.
-
-The complete protocol, atomicity boundary, recovery model, and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
 ## Router Process
 
 Each database node can run with a companion `Router` process. The Router is an
@@ -159,38 +161,48 @@ curl.exe -X POST http://localhost:9081/sql `
 ```
 
 Applications should use the Router URL as their database endpoint and do not need to know the current table leader. If a leader election changes ownership, the Router refreshes its cached route automatically. Database ports (`8080`) remain node-to-node and direct database endpoints; client traffic should normally use the Router ports.
-## Architecture
 
-### High-level architecture
+## Distributed transactions
 
-![High-level per-table leadership architecture](./docs/high-level-architecture.svg?raw=true)
+Distributed transactions are supported when one transaction writes to multiple tables. A coordinator groups the staged writes by table, discovers each table leader, runs the prepare phase on every participant, and sends commit only after every participant has acknowledged prepare. Each participant applies its batch through the normal WAL, memtable, index, and change-log path.
 
-The cluster has independent leadership groups per table. A node may lead one
-table while following another. The internal `__table_ownership` table records
-which nodes currently own each table, the table term, leader URL, and rebalance
-identifier.
+![Distributed transaction two-phase commit](./docs/distributed-transaction-2pc.svg?raw=true)
 
-### Low-level table flow
+The client API is:
 
-![Low-level table election, write, and bootstrap flow](./docs/low-level-table-architecture.svg?raw=true)
+- `POST /distributed-transactions`: begin a distributed transaction.
+- `PUT /distributed-transactions/{id}/writes`: stage `{ table, key, value, isDeleted }`.
+- `POST /distributed-transactions/{id}/commit`: run 2PC and return `committed`, `aborted`, or `in-doubt`.
+- `DELETE /distributed-transactions/{id}`: abort the coordinator transaction.
+- `GET /distributed-transactions/{id}`: inspect durable transaction state.
+- `POST /distributed-transactions/{id}/recover`: request recovery/status evaluation.
+- `GET /distributed-transactions/metrics`: inspect 2PC phase counters and prepared/active counts.
 
-Writes first pass through the table-specific role guard. The table leader
-appends to that table's WAL and memtable, then publishes a committed event.
-Followers bootstrap with a table snapshot and continue from its sequence through
-the SSE change stream. Each follower filters the shared change log by table.
+A successful path is: discover all leaders → prepare every participant → commit every participant. If discovery, prepare, or a prepare timeout fails, already-prepared participants receive abort and no staged value becomes visible. If a failure occurs after prepare has succeeded, 2PC can enter an `in-doubt` state: the coordinator must recover the decision before participants can safely finish. Prepared state and coordinator decisions are journaled, idempotent phase retries are supported, and abandoned coordinator transactions are expired automatically. The complete protocol and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
+### 2PC happy path
 
-### Supported architecture
+![2PC happy path](./docs/distributed-transaction-happy-path.svg?raw=true)
 
-- Independent Raft terms, votes, heartbeats, and elections per table.
-- Multiple followers per table and different leaders for different tables.
-- Table-specific write rejection with the current leader URL.
-- Runtime peer registration through `POST /raft/membership/register`.
-- Health-based automatic and explicit rebalancing through `POST /raft/rebalance`.
-- Internal `__table_ownership` metadata storage, hidden from public table lists.
-- Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
-- Per-table applied sequence tracking and SSE reconnection.
-- Table-local WALs and shared database change-log events.
-- Distributed transaction coordination uses two-phase commit across the affected table leaders.
+1. The Router sends the transaction request to a coordinator.
+2. The coordinator groups writes by table and discovers each table leader.
+3. It sends `prepare` to every participant. Participants journal the write set but do not expose it to reads.
+4. After all prepare acknowledgements, the coordinator journals `committing`.
+5. It sends `commit` to every participant. Each participant uses the normal WAL, memtable, index, and change-log path.
+6. The coordinator returns `committed` only after all participants acknowledge.
+
+### 2PC failure path and recovery
+
+![2PC failure path](./docs/distributed-transaction-failure-path.svg?raw=true)
+
+- Failure during leader discovery or prepare: already-prepared participants receive abort and the result is `aborted`.
+- Failure after prepare: the coordinator returns `in-doubt`; prepared participants do not guess whether to commit or abort.
+- Participant restart: its journal reloads prepared data and automatically replays journaled committing decisions.
+- Repeated prepare or commit: requests are idempotent and return the existing decision.
+- Abandoned active transactions: the background cleanup service expires them after one hour.
+- Operational recovery: query `GET /distributed-transactions/{id}`, call `POST /distributed-transactions/{id}/recover`, and inspect `GET /distributed-transactions/metrics`.
+
+The complete protocol, atomicity boundary, recovery model, and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
+
 ## Data Model
 
 The database stores named tables. Each table is an independent key/value LSM
@@ -479,6 +491,7 @@ FROM users
 JOIN orders ON users.value.customerId = orders.value.customerId
 LIMIT 100
 ```
+
 ## HTTP API
 
 - `GET /tables`: list tables.
@@ -566,6 +579,7 @@ method, URL, retry attempt, response status, elapsed time, transport failures,
 stream reconnects, and SSE heartbeats are logged at appropriate levels. Transient
 HTTP failures and transport errors are retried with exponential backoff. Change
 stream reconnection resumes from the last received sequence.
+
 ## TCP SQL
 
 The service also exposes a long-lived TCP SQL session endpoint, similar to a
