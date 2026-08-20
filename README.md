@@ -12,6 +12,9 @@ This project is database backed by a write-optimized key/value store.
 - Use configurable SSTable blocks with sparse indexes so point reads can seek
   to a small block instead of reading a whole SSTable.
 - Support explicit local transactions and distributed transactions across table leaders using two-phase commit.
+- Coordinate multi-table commits with a coordinator-driven prepare/commit/abort protocol and explicit `in-doubt` outcomes.
+- Persist distributed transaction coordinator and participant state for restart recovery, idempotent phase retries, and automatic expiration cleanup.
+- Expose distributed transaction status, recovery, structured logs, and phase metrics for operations.
 - Use read-your-writes with read-committed visibility for transactions; conflicting writes use last-commit-wins semantics, with no snapshot or serializable isolation.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
