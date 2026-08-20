@@ -40,6 +40,15 @@ sealed class LeaderRouter
 
     public async Task<IResult> ForwardAsync(HttpContext context, CancellationToken cancellationToken)
     {
+        byte[]? requestBody = null;
+        if (context.Request.ContentLength is > 0 || context.Request.Headers.ContainsKey("Transfer-Encoding"))
+        {
+            context.Request.EnableBuffering();
+            using var requestBuffer = new MemoryStream();
+            await context.Request.Body.CopyToAsync(requestBuffer, cancellationToken);
+            requestBody = requestBuffer.ToArray();
+            context.Request.Body.Position = 0;
+        }
         var table = await ResolveTableAsync(context, cancellationToken);
         var target = await ResolveLeaderAsync(table, cancellationToken);
         var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target + context.Request.PathBase + context.Request.Path + context.Request.QueryString);
@@ -49,7 +58,7 @@ sealed class LeaderRouter
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
         }
         if (context.Request.ContentLength is > 0 || context.Request.Headers.ContainsKey("Transfer-Encoding"))
-            request.Content = new StreamContent(context.Request.Body);
+            request.Content = new ByteArrayContent(requestBody ?? Array.Empty<byte>());
 
         using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.MovedPermanently or HttpStatusCode.TemporaryRedirect)

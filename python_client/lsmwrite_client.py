@@ -115,6 +115,9 @@ class LsmWriteDbClient:
     def begin(self):
         result = self._request("POST", "/transactions")
         return Transaction(self, result["transactionId"])
+    def begin_distributed(self):
+        result = self._request("POST", "/distributed-transactions")
+        return DistributedTransaction(self, result["transactionId"])
     def changes(self, from_sequence: int = 0, limit: int = 100):
         return self._request("GET", f"/changes?{urllib.parse.urlencode({'fromSequence': from_sequence, 'limit': limit})}")
     def stream_changes(self, from_sequence: int = 0, *, reconnect: bool = True) -> Iterator[dict[str, Any]]:
@@ -144,6 +147,15 @@ class LsmWriteDbClient:
                 if response is not None: response.close()
             if not reconnect: return
 
+class DistributedTransaction:
+    def __init__(self, client: LsmWriteDbClient, transaction_id: str):
+        self.client, self.id = client, transaction_id
+    def write(self, table: str, key: str, value: str | None = None, *, deleted: bool = False):
+        return self.client._request("PUT", f"/distributed-transactions/{self.id}/writes", {"table": table, "key": key, "value": value, "isDeleted": deleted})
+    def commit(self): return self.client._request("POST", f"/distributed-transactions/{self.id}/commit")
+    def status(self): return self.client._request("GET", f"/distributed-transactions/{self.id}")
+    def recover(self): return self.client._request("POST", f"/distributed-transactions/{self.id}/recover")
+    def rollback(self): return self.client._request("DELETE", f"/distributed-transactions/{self.id}")
 class Transaction:
     def __init__(self, client: LsmWriteDbClient, transaction_id: str):
         self.client, self.id = client, transaction_id

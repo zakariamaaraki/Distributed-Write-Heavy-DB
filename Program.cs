@@ -21,6 +21,8 @@ builder.Services.AddSingleton(new LsmStoreOptions(
 builder.Services.AddSingleton<ChangeLogService>();
 builder.Services.AddSingleton<DatabaseEngine>();
 builder.Services.AddSingleton<TransactionManager>();
+builder.Services.AddSingleton<DistributedTransactionManager>();
+builder.Services.AddHostedService<DistributedTransactionCleanupService>();
 builder.Services.AddSingleton<SqlEngine>();
 builder.Services.AddSingleton(raftOptions);
 builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
@@ -46,6 +48,7 @@ app.MapGet("/", () => Results.Ok(new { name = "Simple LSM Write Database" }));
 
 app.MapTableEndpoints();
 app.MapTransactionEndpoints();
+app.MapDistributedTransactionEndpoints();
 app.MapIndexEndpoints();
 app.MapSqlEndpoints();
 app.MapSqlConsoleEndpoints();

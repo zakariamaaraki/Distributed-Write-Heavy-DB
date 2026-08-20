@@ -11,7 +11,7 @@ This project is database backed by a write-optimized key/value store.
 - Use Bloom filters to skip SSTables that definitely do not contain a key.
 - Use configurable SSTable blocks with sparse indexes so point reads can seek
   to a small block instead of reading a whole SSTable.
-- Support explicit transactions with begin, staged writes, commit, and rollback.
+- Support explicit local transactions and distributed transactions across table leaders using two-phase commit.
 - Use read-your-writes with read-committed visibility for transactions; conflicting writes use last-commit-wins semantics, with no snapshot or serializable isolation.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
@@ -50,9 +50,47 @@ table's members. A table without a majority becomes unavailable for writes to
 avoid split-brain behavior. See [design/table-leadership.md](./design/table-leadership.md)
 for the ownership, bootstrap, failure, and rebalancing protocol.
 
-Distributed transactions are not implemented: a transaction that writes more
-than one table cannot be atomically committed across table leaders. Cross-table
-JOINs remain read-only.
+Distributed transactions use a coordinator-driven two-phase commit protocol across table leaders. Cross-table JOINs remain read-only.
+## Distributed transactions
+
+Distributed transactions are supported when one transaction writes to multiple tables. A coordinator groups the staged writes by table, discovers each table leader, runs the prepare phase on every participant, and sends commit only after every participant has acknowledged prepare. Each participant applies its batch through the normal WAL, memtable, index, and change-log path.
+
+![Distributed transaction two-phase commit](./docs/distributed-transaction-2pc.svg?raw=true)
+
+The client API is:
+
+- `POST /distributed-transactions`: begin a distributed transaction.
+- `PUT /distributed-transactions/{id}/writes`: stage `{ table, key, value, isDeleted }`.
+- `POST /distributed-transactions/{id}/commit`: run 2PC and return `committed`, `aborted`, or `in-doubt`.
+- `DELETE /distributed-transactions/{id}`: abort the coordinator transaction.
+- `GET /distributed-transactions/{id}`: inspect durable transaction state.
+- `POST /distributed-transactions/{id}/recover`: request recovery/status evaluation.
+- `GET /distributed-transactions/metrics`: inspect 2PC phase counters and prepared/active counts.
+
+A successful path is: discover all leaders → prepare every participant → commit every participant. If discovery, prepare, or a prepare timeout fails, already-prepared participants receive abort and no staged value becomes visible. If a failure occurs after prepare has succeeded, 2PC can enter an `in-doubt` state: the coordinator must recover the decision before participants can safely finish. Prepared state and coordinator decisions are journaled, idempotent phase retries are supported, and abandoned coordinator transactions are expired automatically. The complete protocol and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
+### 2PC happy path
+
+![2PC happy path](./docs/distributed-transaction-happy-path.svg?raw=true)
+
+1. The Router sends the transaction request to a coordinator.
+2. The coordinator groups writes by table and discovers each table leader.
+3. It sends `prepare` to every participant. Participants journal the write set but do not expose it to reads.
+4. After all prepare acknowledgements, the coordinator journals `committing`.
+5. It sends `commit` to every participant. Each participant uses the normal WAL, memtable, index, and change-log path.
+6. The coordinator returns `committed` only after all participants acknowledge.
+
+### 2PC failure path and recovery
+
+![2PC failure path](./docs/distributed-transaction-failure-path.svg?raw=true)
+
+- Failure during leader discovery or prepare: already-prepared participants receive abort and the result is `aborted`.
+- Failure after prepare: the coordinator returns `in-doubt`; prepared participants do not guess whether to commit or abort.
+- Participant restart: its journal reloads prepared data and automatically replays journaled committing decisions.
+- Repeated prepare or commit: requests are idempotent and return the existing decision.
+- Abandoned active transactions: the background cleanup service expires them after one hour.
+- Operational recovery: query `GET /distributed-transactions/{id}`, call `POST /distributed-transactions/{id}/recover`, and inspect `GET /distributed-transactions/metrics`.
+
+The complete protocol, atomicity boundary, recovery model, and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
 ## Router Process
 
 Each database node can run with a companion `Router` process. The Router is an
@@ -80,8 +118,7 @@ dotnet run --project Router/Router.csproj --urls http://localhost:9080
 ```
 
 Clients should connect to the Router port rather than selecting a table leader
-manually. The Router does not implement distributed transactions; cross-table
-transactions remain rejected by the database.
+manually. The Router forwards distributed transaction requests to a coordinator; the coordinator then contacts each affected table leader.
 ### Calling the database through the Router
 
 When using Docker Compose, send requests to the Router port instead of the database port:
@@ -150,7 +187,7 @@ the SSE change stream. Each follower filters the shared change log by table.
 - Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
 - Per-table applied sequence tracking and SSE reconnection.
 - Table-local WALs and shared database change-log events.
-- Cross-table distributed transactions are intentionally unsupported.
+- Distributed transaction coordination uses two-phase commit across the affected table leaders.
 ## Data Model
 
 The database stores named tables. Each table is an independent key/value LSM
