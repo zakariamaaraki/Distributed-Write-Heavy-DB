@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Router;
 
 public enum ReadConsistencyLevel
@@ -27,6 +29,15 @@ public static class ReadConsistencyPolicy
 
         level = default;
         return false;
+    }
+
+    public static string? ClassifySqlStatement(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        var value = Regex.Match(query.Trim(), "^(SELECT|SHOW\\s+TABLES|BEGIN|COMMIT|ROLLBACK)\\b", RegexOptions.IgnoreCase).Value;
+        return string.IsNullOrWhiteSpace(value) ? null : value.ToUpperInvariant();
     }
 
     public static bool ShouldRouteToLeader(

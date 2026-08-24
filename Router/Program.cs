@@ -190,7 +190,7 @@ sealed class LeaderRouter
         {
             using var document = JsonDocument.Parse(body);
             var query = document.RootElement.GetProperty("query").GetString() ?? string.Empty;
-            return Regex.Match(query.Trim(), "^(BEGIN|COMMIT|ROLLBACK)", RegexOptions.IgnoreCase).Value.ToUpperInvariant();
+            return ReadConsistencyPolicy.ClassifySqlStatement(query);
         }
         catch (Exception) when (body is not null) { return null; }
     }
