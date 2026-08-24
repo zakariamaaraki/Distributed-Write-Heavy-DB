@@ -92,6 +92,45 @@ public sealed class SstableStoreTests
     }
 
     [Fact]
+    public async Task WriteTableAsyncSplitsLargeRunsAndUsesSparseIndexesForPointCandidates()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var store = new SstableStore(dataPath, blockSizeBytes: 180, maxFileSizeBytes: 500);
+            var records = Enumerable
+                .Range(1, 20)
+                .Select(number => new StoredRecord(
+                    number,
+                    $"key:{number:000}",
+                    new string('x', 80),
+                    IsDeleted: false))
+                .ToList();
+
+            await store.WriteTableAsync(records);
+
+            var files = store.GetDataFilesNewestFirst();
+            Assert.True(files.Count > 1);
+            Assert.All(files, file =>
+            {
+                Assert.True(new FileInfo(file).Length <= 500);
+                Assert.True(File.Exists(Path.ChangeExtension(file, ".bloom.json")));
+                Assert.True(File.Exists(Path.ChangeExtension(file, ".index.json")));
+            });
+
+            var candidates = await store.GetCandidateDataFilesAsync("key:017");
+            Assert.NotEmpty(candidates);
+            Assert.True(candidates.Count < files.Count);
+            var hit = await store.TryGetAsync(candidates[0], "key:017");
+            Assert.NotNull(hit);
+            Assert.Equal(17, hit.Sequence);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+    [Fact]
     public async Task ReadTableAsync_FallsBackToLegacyJsonSstableWithoutIndex()
     {
         var dataPath = CreateTempDataPath();

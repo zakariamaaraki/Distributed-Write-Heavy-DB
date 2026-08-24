@@ -104,6 +104,39 @@ public sealed class LsmStoreTests
     }
 
     [Fact]
+    public async Task FlushAsyncSplitsCompactedRunsAndRestoresAcrossFiles()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var options = new LsmStoreOptions(
+                dataPath,
+                FlushThreshold: 2,
+                BlockSizeBytes: 180,
+                MaxSstableFileSizeBytes: 500);
+            var store = new LsmStore(options);
+            await store.InitializeAsync();
+
+            for (var number = 1; number <= 20; number++)
+            {
+                await store.PutAsync($"key:{number:000}", new string('x', 80));
+            }
+
+            var stats = await store.GetStatsAsync();
+            Assert.True(stats.SstableCount > 1);
+            Assert.Equal(new string('x', 80), (await store.GetAsync("key:017"))?.Value);
+
+            var restored = new LsmStore(options);
+            await restored.InitializeAsync();
+            Assert.Equal(new string('x', 80), (await restored.GetAsync("key:017"))?.Value);
+            Assert.Equal(20, (await restored.ScanAsync()).Count);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+    [Fact]
     public async Task FlushAsync_WritesSortedSstableAndCompactsToSingleTable()
     {
         var dataPath = CreateTempDataPath();

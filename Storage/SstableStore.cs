@@ -7,6 +7,7 @@ namespace LsmWriteDb.Storage;
 internal sealed class SstableStore
 {
     public const int DefaultBlockSizeBytes = 16 * 1024;
+    public const int DefaultMaxFileSizeBytes = 64 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -15,16 +16,26 @@ internal sealed class SstableStore
 
     private readonly string _sstableDirectory;
     private readonly int _blockSizeBytes;
+    private readonly int _maxFileSizeBytes;
 
-    public SstableStore(string dataPath, int blockSizeBytes = DefaultBlockSizeBytes)
+    public SstableStore(
+        string dataPath,
+        int blockSizeBytes = DefaultBlockSizeBytes,
+        int maxFileSizeBytes = DefaultMaxFileSizeBytes)
     {
         if (blockSizeBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(blockSizeBytes), "Block size must be greater than zero.");
         }
 
+        if (maxFileSizeBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxFileSizeBytes), "Maximum SSTable file size must be greater than zero.");
+        }
+
         _sstableDirectory = Path.Combine(dataPath, "sstables");
         _blockSizeBytes = blockSizeBytes;
+        _maxFileSizeBytes = maxFileSizeBytes;
     }
 
     public Task<int> CountAsync()
@@ -44,6 +55,23 @@ internal sealed class SstableStore
             .Where(IsDataFile)
             .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<string>> GetCandidateDataFilesAsync(string key)
+    {
+        var candidates = new List<string>();
+        foreach (var dataPath in GetDataFilesNewestFirst())
+        {
+            var index = await ReadSparseIndexAsync(dataPath);
+            if (index is null || index.Any(entry =>
+                    string.CompareOrdinal(key, entry.FirstKey) >= 0
+                    && string.CompareOrdinal(key, entry.LastKey) <= 0))
+            {
+                candidates.Add(dataPath);
+            }
+        }
+
+        return candidates;
     }
 
     public async Task<IReadOnlyList<StoredRecord>> ReadTableAsync(string dataPath)
@@ -93,6 +121,43 @@ internal sealed class SstableStore
 
     public async Task WriteTableAsync(IReadOnlyList<StoredRecord> records)
     {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var createdFiles = new List<string>();
+        var fileBlocks = new List<EncodedBlock>();
+        var fileBytes = 0;
+        try
+        {
+            foreach (var block in BuildBlocks(records))
+            {
+                if (fileBlocks.Count > 0 && fileBytes + block.Bytes.Length > _maxFileSizeBytes)
+                {
+                    createdFiles.Add(await WriteTableFileAsync(fileBlocks));
+                    fileBlocks.Clear();
+                    fileBytes = 0;
+                }
+
+                fileBlocks.Add(block);
+                fileBytes += block.Bytes.Length;
+            }
+
+            if (fileBlocks.Count > 0)
+            {
+                createdFiles.Add(await WriteTableFileAsync(fileBlocks));
+            }
+        }
+        catch
+        {
+            await DeleteTablesAsync(createdFiles);
+            throw;
+        }
+    }
+
+    private async Task<string> WriteTableFileAsync(IReadOnlyList<EncodedBlock> blocks)
+    {
         var tableName = $"sstable-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfffffff}-{Guid.NewGuid():N}.json";
         var finalPath = Path.Combine(_sstableDirectory, tableName);
         var bloomPath = GetBloomPath(finalPath);
@@ -102,20 +167,40 @@ internal sealed class SstableStore
         var indexTempPath = indexPath + ".tmp";
 
         Directory.CreateDirectory(_sstableDirectory);
-
-        var bloom = BloomFilter.CreateForItemCount(records.Count);
-        foreach (var record in records)
+        try
         {
-            bloom.Add(record.Key);
+            var records = blocks.SelectMany(block => block.Records).ToList();
+            var bloom = BloomFilter.CreateForItemCount(records.Count);
+            foreach (var record in records)
+            {
+                bloom.Add(record.Key);
+            }
+
+            var sparseIndex = await WriteBlocksAsync(tempPath, blocks);
+            await File.WriteAllTextAsync(
+                bloomTempPath,
+                JsonSerializer.Serialize(bloom.ToSnapshot(), JsonOptions),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            await File.WriteAllTextAsync(
+                indexTempPath,
+                JsonSerializer.Serialize(sparseIndex, JsonOptions),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            File.Move(bloomTempPath, bloomPath, overwrite: true);
+            File.Move(indexTempPath, indexPath, overwrite: true);
+            File.Move(tempPath, finalPath, overwrite: true);
+            return finalPath;
         }
-
-        var sparseIndex = await WriteBlocksAsync(tempPath, records);
-        await File.WriteAllTextAsync(bloomTempPath, JsonSerializer.Serialize(bloom.ToSnapshot(), JsonOptions), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        await File.WriteAllTextAsync(indexTempPath, JsonSerializer.Serialize(sparseIndex, JsonOptions), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        File.Move(bloomTempPath, bloomPath, overwrite: true);
-        File.Move(indexTempPath, indexPath, overwrite: true);
-        File.Move(tempPath, finalPath, overwrite: true);
+        catch
+        {
+            File.Delete(tempPath);
+            File.Delete(bloomTempPath);
+            File.Delete(indexTempPath);
+            File.Delete(finalPath);
+            File.Delete(bloomPath);
+            File.Delete(indexPath);
+            throw;
+        }
     }
 
     public Task DeleteTablesAsync(IEnumerable<string> dataPaths)
@@ -210,7 +295,7 @@ internal sealed class SstableStore
 
     private async Task<IReadOnlyList<SparseIndexEntry>> WriteBlocksAsync(
         string tempPath,
-        IReadOnlyList<StoredRecord> records)
+        IReadOnlyList<EncodedBlock> blocks)
     {
         var index = new List<SparseIndexEntry>();
         await using var stream = new FileStream(
@@ -221,7 +306,7 @@ internal sealed class SstableStore
             bufferSize: 4096,
             FileOptions.Asynchronous | FileOptions.WriteThrough);
 
-        foreach (var block in BuildBlocks(records))
+        foreach (var block in blocks)
         {
             var offset = stream.Position;
             await stream.WriteAsync(block.Bytes);

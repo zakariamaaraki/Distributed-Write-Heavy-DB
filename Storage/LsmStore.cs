@@ -9,9 +9,11 @@ public sealed record LsmStoreOptions(
     string DataPath,
     int FlushThreshold,
     string TableName = TableNames.Default,
-    int BlockSizeBytes = LsmStoreOptions.DefaultBlockSizeBytes)
+    int BlockSizeBytes = LsmStoreOptions.DefaultBlockSizeBytes,
+    int MaxSstableFileSizeBytes = LsmStoreOptions.DefaultMaxSstableFileSizeBytes)
 {
     public const int DefaultBlockSizeBytes = SstableStore.DefaultBlockSizeBytes;
+    public const int DefaultMaxSstableFileSizeBytes = SstableStore.DefaultMaxFileSizeBytes;
 }
 
 public sealed record KeyValueRow(string Key, string Value);
@@ -90,10 +92,15 @@ public sealed class LsmStore
             throw new ArgumentOutOfRangeException(nameof(options), "Block size must be greater than zero.");
         }
 
+        if (options.MaxSstableFileSizeBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Maximum SSTable file size must be greater than zero.");
+        }
+
         _options = options with { TableName = TableNames.Normalize(options.TableName) };
         _changeLog = changeLog;
         _sequenceGenerator = sequenceGenerator;
-        _sstables = new SstableStore(options.DataPath, options.BlockSizeBytes);
+        _sstables = new SstableStore(options.DataPath, options.BlockSizeBytes, options.MaxSstableFileSizeBytes);
         _walPath = Path.Combine(options.DataPath, "wal.log");
     }
 
@@ -260,7 +267,7 @@ public sealed class LsmStore
             }
 
             StoredRecord? newest = null;
-            foreach (var file in _sstables.GetDataFilesNewestFirst())
+            foreach (var file in await _sstables.GetCandidateDataFilesAsync(key))
             {
                 var record = await _sstables.TryGetAsync(file, key);
                 if (record is null)

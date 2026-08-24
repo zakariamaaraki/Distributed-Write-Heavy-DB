@@ -21,6 +21,8 @@ This document is organized from the distributed architecture down to the storage
   to a small block instead of reading a whole SSTable.
 - Support explicit local transactions and distributed transactions across table leaders using two-phase commit.
 - Coordinate multi-table commits with a coordinator-driven prepare/commit/abort protocol and explicit `in-doubt` outcomes.
+- Bound each physical SSTable file so large flushes and compactions produce
+  multiple manageable files instead of one unbounded file.
 - Persist distributed transaction coordinator and participant state for restart recovery, idempotent phase retries, and automatic expiration cleanup.
 - Expose distributed transaction status, recovery, structured logs, and phase metrics for operations.
 - Use read-your-writes with read-committed visibility for transactions; conflicting writes use last-commit-wins semantics, with no snapshot or serializable isolation.
@@ -62,6 +64,11 @@ appends to that table's WAL and memtable, then publishes a committed event.
 Followers bootstrap with a table snapshot and continue from its sequence through
 the SSE change stream. Each follower filters the shared change log by table.
 
+Large flushes and compactions are represented as bounded immutable SSTable files.
+Each file has its own Bloom filter and sparse-index sidecars, so a large sorted
+run never requires one unbounded JSON data file. The configured maximum is a
+storage safety limit; a single oversized record/block may exceed it because a
+record is never split across blocks.
 ### Supported architecture
 
 - Independent Raft terms, votes, heartbeats, and elections per table.
@@ -999,49 +1006,22 @@ The memtable supports:
 
 ### SSTables
 
-The diagram below shows the physical files written for one flushed SSTable:
-the data file is a byte stream of sorted JSON block arrays, the Bloom sidecar
-stores key membership bits, and the sparse index sidecar maps key ranges to
-exact byte offsets and lengths inside the data file.
+Each table flush creates one immutable sorted run. The run is encoded as sorted
+JSON blocks and partitioned into one or more bounded physical SSTable files under
+the table's `sstables/` directory. Each physical data file has two sidecars:
+
+- `.bloom.json`: a Bloom filter for definite-miss checks.
+- `.index.json`: a sparse index with one entry per block, including key range,
+  byte offset, byte length, record count, and checksum.
 
 ![SSTable block storage, Bloom filter, and sparse index layout](./docs/sstable-block-index-architecture.svg)
 
-Each table flush creates one immutable sorted string table on disk under that
-table's `sstables/` directory.
-Records are written in key order, which makes range queries possible without
-loading the whole database into memory.
-
-Each SSTable block also stores an uppercase SHA-256 checksum in its sparse-index entry. Reads verify the checksum before deserializing the block and fail with `InvalidDataException` if the bytes have changed. Legacy SSTables without checksums remain readable.
-
-Each SSTable has a companion Bloom filter sidecar file. Point reads check the
-Bloom filter before opening the data file, which avoids unnecessary file reads
-for keys that are definitely absent.
-
-Without compaction, every flush would leave another SSTable behind for that
-table. A point read that misses the table memtable would then check that table's
-SSTables from newest to oldest, because newer SSTables contain newer writes for
-the same key. The first matching non-deleted record is the value to return.
-
-In this project, compaction runs immediately after every flush. That means the
-normal state after compaction is one compacted SSTable plus the active memtable,
-not many SSTables. The newest-to-oldest read path still works if multiple
-SSTables exist temporarily before compaction, or if the compaction strategy is
-changed later.
-
-SSTable data is still stored as JSON so the implementation stays easy to
-inspect, but new SSTables are written as multiple sorted JSON blocks instead of
-one large JSON array. Each SSTable has two sidecar files:
-
-- `.bloom.json`: Bloom filter for fast definite-miss checks.
-- `.index.json`: sparse index with one entry per data block.
-
 The block size is configurable with `Lsm:BlockSizeBytes` or the
-`Lsm__BlockSizeBytes` environment variable. The default is `16384` bytes. A
-smaller block size means point reads deserialize fewer bytes, but it creates more
-index entries and more blocks. A larger block size keeps the index smaller and
-reduces block count, but each point read may deserialize more data. The block
-size is a target: if a single record makes a block cross the configured size, the
-record stays in that block.
+`Lsm__BlockSizeBytes` environment variable. The maximum physical file size is
+configurable with `Lsm:MaxSstableFileSizeBytes` or
+`Lsm__MaxSstableFileSizeBytes`. Defaults are `16384` bytes per block and
+`67108864` bytes per physical SSTable file. These are targets: a single record
+or block is never split, so an oversized record may exceed the file target.
 
 ### Sparse Index
 
@@ -1049,39 +1029,32 @@ The sparse index does not store every key. It stores one row per SSTable block:
 
 ```jsonc
 {
-  "firstKey": "customer:1000", // first sorted key in this block
-  "lastKey": "customer:1499",  // last sorted key in this block
-  "offset": 348,               // byte position where this block starts in the SSTable file
-  "length": 553,               // number of bytes to read for this block
-  "recordCount": 500           // records stored inside this block
+  "firstKey": "customer:1000",
+  "lastKey": "customer:1499",
+  "offset": 348,
+  "length": 553,
+  "recordCount": 500,
+  "checksum": "..."
 }
 ```
 
-For a point read that misses the memtable, the store checks SSTables from newest
-to oldest:
+For a point lookup that misses the memtable, the store first reads sparse-index
+sidecars across the SSTable files and selects files whose block ranges can contain
+the requested key. It then checks Bloom filters and opens only those candidate
+data files. Since different flushes can have overlapping key ranges, all relevant
+indexes are considered and the highest sequence wins. Legacy SSTables without an
+index remain readable through the full-file fallback.
 
-1. Read the Bloom filter. If it says the key is definitely absent, skip the
-   SSTable.
-2. Read the sparse index and find the block where
-   `firstKey <= requested key <= lastKey`.
-3. Open the SSTable data file, seek to `offset`, read `length` bytes, and
-   deserialize only that block.
-4. Search the block for the exact key and return the newest non-deleted record.
-
-Old SSTables without an `.index.json` sidecar are still supported through a
-legacy fallback that reads the old full-file JSON array.
-
-**TODO: optimize range reads with sparse-index bounds.** Point reads now seek to
-one candidate block. Range reads still load SSTable blocks and filter records,
-so they can be improved later by seeking only the blocks that overlap the range.
+Range reads still merge records from all relevant SSTable files, keep the newest
+sequence for each key, and discard tombstones.
 
 ### Compaction
 
-Compaction runs immediately after each flush.
-
-The compactor reads all SSTables, keeps only the newest record for each key,
-drops tombstoned keys, and writes one compacted SSTable. The old SSTables are
-then removed.
+Compaction runs immediately after each flush. The compactor reads all SSTable
+files, keeps the newest record for each key, drops tombstones, and writes one
+compacted sorted run split into bounded SSTable files. New files are completed
+before old files are deleted, so a failed compaction does not remove the prior
+readable run.
 
 This keeps read and range-query amplification low while avoiding a full leveled
 LSM implementation.
@@ -1096,18 +1069,17 @@ LSM implementation.
 6. If the table memtable reaches the flush threshold:
    - write that table's memtable as a new SSTable,
    - clear that table's write-ahead log,
-   - compact that table's SSTables into one SSTable.
+   - compact that table's SSTables into one bounded sorted run.
 
 ## Point Read Path
 
 1. Route the read to the requested table.
 2. Check that table's memtable first.
 3. If the key is tombstoned, return not found.
-4. If not found in memory, scan that table's SSTables from newest to oldest.
-5. Use each SSTable's Bloom filter to skip files that definitely do not contain
-   the key.
-6. Use the sparse index to find the candidate block, seek to that block, and
-   deserialize only that block.
+4. Read sparse indexes to select candidate SSTable files whose block ranges can
+   contain the key.
+5. Use candidate Bloom filters to skip definite misses.
+6. Seek to candidate block offsets and deserialize only those blocks.
 7. Return the newest non-tombstoned value, or not found.
 
 ## Range Read Path
@@ -1121,7 +1093,8 @@ LSM implementation.
 7. Return up to `limit` records in sorted key order.
 
 Because compaction runs after every flush, the usual case for each table is one
-SSTable plus that table's active memtable.
+compacted run represented by one or more bounded SSTable files plus that table's
+active memtable.
 
 ## Storage Layout
 
@@ -1151,7 +1124,8 @@ SSTable block size can be configured in `appsettings.json`:
 {
   "Lsm": {
     "FlushThreshold": 100,
-    "BlockSizeBytes": 16384
+    "BlockSizeBytes": 16384,
+    "MaxSstableFileSizeBytes": 67108864
   }
 }
 ```

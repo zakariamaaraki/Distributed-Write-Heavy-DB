@@ -139,11 +139,19 @@ not used to resolve ownership epochs.
 
 ## Storage layout
 
+Each table owns a WAL, memtable, and a directory of bounded immutable SSTable
+files. A sorted flush or compaction run may produce several `sstable-*.json`
+files. Every data file has matching `.bloom.json` and `.index.json` sidecars.
+Point reads inspect sparse-index ranges first, then open only candidate data
+files; range reads merge records from all files and keep the highest sequence.
+The file-size target is configurable through `Lsm:MaxSstableFileSizeBytes`.
+
+
 ```text
 data/
 ├── tables/
 │   ├── __table_ownership/       # internal metadata table
-│   ├── users/                   # table-local WAL and SSTables
+│   ├── users/                   # table-local WAL and bounded SSTable files
 │   └── orders/
 └── raft/
     ├── cluster-state.json       # bootstrap/global membership

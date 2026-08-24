@@ -395,7 +395,8 @@ public sealed class DatabaseEngine
                     tablePath,
                     _options.FlushThreshold,
                     name,
-                    _options.BlockSizeBytes),
+                    _options.BlockSizeBytes,
+                    _options.MaxSstableFileSizeBytes),
                 _changeLog,
                 _sequenceGenerator);
         });
