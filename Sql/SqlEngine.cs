@@ -14,6 +14,7 @@ public sealed class SqlEngine
     private readonly RaftRoleGuard? _roleGuard;
     private readonly TableRaftRoleGuard? _tableRoleGuard;
     private readonly DistributedTransactionManager? _distributedTransactions;
+    private readonly TableRaftCoordinator? _tableCoordinator;
 
     public SqlEngine(LsmStore store, TransactionManager transactions)
         : this(store, transactions, roleGuard: null)
@@ -32,13 +33,14 @@ public sealed class SqlEngine
     {
     }
 
-    public SqlEngine(DatabaseEngine database, TransactionManager transactions, RaftRoleGuard? roleGuard, TableRaftRoleGuard? tableRoleGuard = null, DistributedTransactionManager? distributedTransactions = null)
+    public SqlEngine(DatabaseEngine database, TransactionManager transactions, RaftRoleGuard? roleGuard, TableRaftRoleGuard? tableRoleGuard = null, DistributedTransactionManager? distributedTransactions = null, TableRaftCoordinator? tableCoordinator = null)
     {
         _database = database;
         _transactions = transactions;
         _roleGuard = roleGuard;
         _tableRoleGuard = tableRoleGuard;
         _distributedTransactions = distributedTransactions;
+        _tableCoordinator = tableCoordinator;
     }
 
     public async Task<SqlExecutionResult> ExecuteAsync(SqlQueryRequest request)
@@ -49,9 +51,13 @@ public sealed class SqlEngine
         }
 
         var statement = SqlParser.Parse(request.Query);
-        if (statement is not SqlSelectStatement)
+        if (statement is not SqlSelectStatement
+            and not SqlBeginStatement
+            and not SqlCommitStatement
+            and not SqlRollbackStatement
+            and not SqlCreateTableStatement)
         {
-            if (_tableRoleGuard is not null && statement is not SqlBeginStatement and not SqlCommitStatement and not SqlRollbackStatement)
+            if (_tableRoleGuard is not null)
                 _tableRoleGuard.EnsureLeader(GetStatementTable(statement));
             else
                 _roleGuard?.EnsureLeader();
@@ -97,34 +103,50 @@ public sealed class SqlEngine
     private async Task<SqlExecutionResult> CommitAsync(Guid? transactionId)
     {
         var id = RequireTransactionId(transactionId, "COMMIT");
-        var tables = _transactions.GetTables(id);
-        if (tables is null)
+        var localOperations = _transactions.GetOperations(id);
+        var localWrites = localOperations?.Select(operation =>
+            new DistributedWrite(operation.Table, operation.Key, operation.Value, operation.IsDeleted)).ToList()
+            ?? [];
+        var allWrites = _distributedTransactions is not null
+            ? await _distributedTransactions.CollectTransactionOperationsAsync(id, localWrites, CancellationToken.None)
+            : localWrites;
+
+        if (allWrites is null)
             throw TransactionNotFound();
-        var stagedOperations = _transactions.GetOperations(id) ?? throw TransactionNotFound();
-        var participantUrls = _distributedTransactions is not null ? await _distributedTransactions.ResolveParticipantUrlsAsync(stagedOperations.Select(operation => new DistributedWrite(operation.Table, operation.Key, operation.Value, operation.IsDeleted)).ToList(), CancellationToken.None) : null;
-        if (participantUrls is { Count: > 1 } && _distributedTransactions is not null)
+
+        if (_distributedTransactions is null)
+        {
+            var commit = await _transactions.CommitAsync(id);
+            if (commit is null)
+                throw TransactionNotFound();
+
+            return SqlExecutionResult.Acknowledged("COMMIT", commit.OperationCount, id, "transaction committed");
+        }
+
+        if (allWrites.Count == 0)
+        {
+            _transactions.Rollback(id);
+            return SqlExecutionResult.Acknowledged("COMMIT", 0, id, "transaction committed");
+        }
+
+        var participantUrls = _distributedTransactions is not null
+            ? await _distributedTransactions.ResolveParticipantUrlsAsync(allWrites, CancellationToken.None)
+            : null;
+
+        if (_distributedTransactions is not null && participantUrls is { Count: > 0 })
         {
             var distributed = _distributedTransactions.Begin();
-            foreach (var operation in stagedOperations) _distributedTransactions.Stage(distributed.TransactionId, new DistributedWrite(operation.Table, operation.Key, operation.Value, operation.IsDeleted), out _);
+            foreach (var write in allWrites)
+                _distributedTransactions.Stage(distributed.TransactionId, write, out _);
             var result = await _distributedTransactions.CommitAsync(distributed.TransactionId, CancellationToken.None);
-            if (result is null || result.Status is "aborted" or "in-doubt") throw new SqlExecutionException($"Distributed transaction {result?.Status ?? "failed"}.");
+            if (result is null || result.Status is "aborted" or "in-doubt")
+                throw new SqlExecutionException($"Distributed transaction {result?.Status ?? "failed"}.");
             _transactions.Rollback(id);
             return SqlExecutionResult.Acknowledged("COMMIT", result.OperationCount, id, "distributed transaction committed");
         }
-        if (_tableRoleGuard is not null && tables.Count == 1) _tableRoleGuard.EnsureLeader(tables[0]);
-        var commit = await _transactions.CommitAsync(id);
-        if (commit is null)
-        {
-            throw TransactionNotFound();
-        }
 
-        return SqlExecutionResult.Acknowledged(
-            "COMMIT",
-            commit.OperationCount,
-            commit.TransactionId,
-            "transaction committed");
+        throw TransactionNotFound();
     }
-
     private SqlExecutionResult Rollback(Guid? transactionId)
     {
         var id = RequireTransactionId(transactionId, "ROLLBACK");
@@ -338,6 +360,11 @@ public sealed class SqlEngine
         }
 
         var created = await _database.CreateTableAsync(statement.Table);
+        if (created && _tableCoordinator is not null)
+        {
+            await _tableCoordinator.EnsureTableAsync(statement.Table);
+            await _tableCoordinator.EnsureTableOnPeersAsync(statement.Table);
+        }
         return SqlExecutionResult.Acknowledged(
             "CREATE TABLE",
             rowsAffected: created ? 1 : 0,

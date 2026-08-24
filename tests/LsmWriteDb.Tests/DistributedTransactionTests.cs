@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Raft;
 using LsmWriteDb.Storage;
@@ -103,4 +105,50 @@ public sealed class DistributedTransactionTests
             Assert.NotNull(manager.Metrics());
         }
         finally { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
-    }}
+    }
+
+    [Fact]
+    public async Task CollectTransactionOperationsReadsTheSharedIdFromPeerNodes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lsm-2pc-collect-" + Guid.NewGuid());
+        try
+        {
+            var options = new LsmStoreOptions(path, FlushThreshold: 100);
+            var database = new DatabaseEngine(options, new ChangeLogService(options));
+            await database.InitializeAsync();
+            var id = Guid.NewGuid();
+            var handler = new StubHttpMessageHandler(request =>
+                request.RequestUri!.AbsolutePath.EndsWith($"/transactions/{id}/operations", StringComparison.Ordinal)
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = JsonContent.Create(new[]
+                        {
+                            new StoreWriteOperation("account-1", "{\"balance\":10}", false) { Table = "accounts" }
+                        })
+                    }
+                    : new HttpResponseMessage(HttpStatusCode.NotFound));
+            using var http = new HttpClient(handler);
+            var raft = new RaftOptions
+            {
+                PublicUrl = "http://local",
+                Peers = [new RaftPeerOptions { NodeId = "peer", Url = "http://peer" }]
+            };
+            var manager = new DistributedTransactionManager(database, raft, http, options, NullLogger<DistributedTransactionManager>.Instance);
+
+            var writes = await manager.CollectTransactionOperationsAsync(id, [
+                new DistributedWrite("users", "user-1", "{\"name\":\"Ada\"}", false)
+            ], CancellationToken.None);
+
+            Assert.NotNull(writes);
+            Assert.Equal(2, writes!.Count);
+            Assert.Contains(writes, write => write.Table == "accounts" && write.Key == "account-1");
+        }
+        finally { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+    }
+
+    private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(responder(request));
+    }
+}

@@ -115,17 +115,53 @@ public sealed class DistributedTransactionManager
         return urls;
     }
 
+    public async Task<IReadOnlyList<DistributedWrite>?> CollectTransactionOperationsAsync(
+        Guid id,
+        IReadOnlyList<DistributedWrite> localWrites,
+        CancellationToken cancellationToken)
+    {
+        var all = new List<DistributedWrite>(localWrites);
+        var found = localWrites.Count > 0;
+        var candidates = new[] { _options.PublicUrl }
+            .Concat(_options.Peers.Select(peer => peer.Url))
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in candidates)
+        {
+            if (IsLocal(candidate!)) continue;
+            try
+            {
+                var operations = await _http.GetFromJsonAsync<List<StoreWriteOperation>>(
+                    candidate!.TrimEnd('/') + $"/transactions/{id}/operations",
+                    cancellationToken);
+                if (operations is null) continue;
+                found = true;
+                all.AddRange(operations.Select(operation => new DistributedWrite(
+                    operation.Table, operation.Key, operation.Value, operation.IsDeleted)));
+            }
+            catch (HttpRequestException) { return null; }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
+        }
+
+        return found ? all : null;
+    }
     public async Task<DistributedTransactionInfo?> CommitAsync(Guid id, CancellationToken cancellationToken)
     {
         if (!_transactions.TryGetValue(id, out var buffer)) return null;
         var groups = buffer.Writes.GroupBy(write => write.Table, StringComparer.Ordinal).ToList();
-        var participants = new List<(string Url, IReadOnlyList<DistributedWrite> Writes)>();
+        var participantWrites = new Dictionary<string, List<DistributedWrite>>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in groups)
         {
             var url = await FindLeaderAsync(group.Key, cancellationToken);
-            if (url is null) { await AbortPreparedAsync(participants, id, cancellationToken); return Info(id, "aborted"); }
-            participants.Add((url, group.ToList()));
+            if (url is null) { return Info(id, "aborted"); }
+            if (!participantWrites.TryGetValue(url, out var writesForParticipant))
+                participantWrites[url] = writesForParticipant = [];
+            writesForParticipant.AddRange(group);
         }
+        var participants = participantWrites
+            .Select(item => (Url: item.Key, Writes: (IReadOnlyList<DistributedWrite>)item.Value))
+            .ToList();
 
         var prepared = new List<(string Url, IReadOnlyList<DistributedWrite> Writes)>();
         foreach (var participant in participants)
@@ -143,8 +179,10 @@ public sealed class DistributedTransactionManager
         foreach (var participant in prepared)
         {
             if (!await SendDecisionAsync(participant.Url, "/commit", id, cancellationToken))
+            {
                 Interlocked.Increment(ref _inDoubtCount);
                 return Info(id, "in-doubt");
+            }
         }
 
         _transactions.TryRemove(id, out _);
@@ -189,8 +227,8 @@ public sealed class DistributedTransactionManager
         {
             try
             {
-                var state = await _http.GetFromJsonAsync<TableStateResponse>(candidate!.TrimEnd('/') + $"/raft/tables/{Uri.EscapeDataString(table)}/state", token);
-                if (state?.Role is 2 or "Leader") return state.LeaderUrl ?? candidate;
+                var state = await _http.GetFromJsonAsync<RaftNodeStatus>(candidate!.TrimEnd('/') + $"/raft/tables/{Uri.EscapeDataString(table)}/state", token);
+                if (state?.Role == RaftRole.Leader) return state.LeaderUrl ?? candidate;
             }
             catch (HttpRequestException) { }
             catch (TaskCanceledException) when (!token.IsCancellationRequested) { }
@@ -251,5 +289,5 @@ public sealed class DistributedTransactionManager
 
     private bool IsLocal(string url) => string.Equals(url.TrimEnd('/'), (_options.PublicUrl ?? string.Empty).TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     private sealed class DistributedBuffer { public DistributedBuffer() { } public DistributedBuffer(DateTimeOffset createdAt, IReadOnlyList<DistributedWrite> writes) { CreatedAt = createdAt; Writes.AddRange(writes); } public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow; public List<DistributedWrite> Writes { get; } = []; }
-    private sealed record TableStateResponse(string? LeaderUrl, object? Role);
+
 }

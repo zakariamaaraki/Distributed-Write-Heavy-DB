@@ -192,6 +192,27 @@ public sealed class TransactionManagerTests
         }
     }
 
+    [Fact]
+    public void Register_UsesTheSameTransactionIdAndSharesStagedOperationShape()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var first = new TransactionManager(new LsmStore(new LsmStoreOptions(dataPath, FlushThreshold: 100)));
+            var id = Guid.NewGuid();
+            var registered = first.Register(id);
+
+            Assert.Equal(id, registered.TransactionId);
+            Assert.True(first.TryStagePut(id, "users", "u1", "Ada", out _));
+            Assert.Single(first.Snapshot(id)!);
+            Assert.True(first.Rollback(id));
+            Assert.Null(first.Snapshot(id));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<LsmStore> CreateStoreAsync(string dataPath, int flushThreshold = 100)
     {
         var store = new LsmStore(new LsmStoreOptions(dataPath, flushThreshold));

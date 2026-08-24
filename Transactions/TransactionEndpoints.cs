@@ -19,6 +19,26 @@ public static class TransactionEndpoints
             return Results.Created($"/transactions/{transaction.TransactionId}", transaction);
         });
 
+        app.MapPost("/transactions/{transactionId:guid}/register", (
+            Guid transactionId,
+            TransactionManager transactions) =>
+            Results.Ok(transactions.Register(transactionId)));
+        app.MapDelete("/transactions/{transactionId:guid}/register", (
+            Guid transactionId,
+            TransactionManager transactions) =>
+            transactions.Rollback(transactionId)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = "transaction not found" }));
+
+        app.MapGet("/transactions/{transactionId:guid}/operations", (
+            Guid transactionId,
+            TransactionManager transactions) =>
+        {
+            var operations = transactions.Snapshot(transactionId);
+            return operations is null
+                ? Results.NotFound(new { error = "transaction not found" })
+                : Results.Ok(operations);
+        });
         app.MapGet("/transactions/{transactionId:guid}/kv/range", async (
             Guid transactionId,
             [FromQuery] string? start,

@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Microsoft.Extensions.Logging;
 
 namespace LsmWriteDb.Raft;
 
@@ -10,6 +11,7 @@ public sealed class RaftNode
     private readonly object _mutex = new();
     private readonly Random _random = new();
     private readonly string? _table;
+    private readonly ILogger<RaftNode>? _logger;
 
     private RaftRole _role = RaftRole.Follower;
     private long _currentTerm;
@@ -19,12 +21,13 @@ public sealed class RaftNode
     private bool _started;
     private long _lastAppliedChangeSequence;
 
-    public RaftNode(RaftOptions options, RaftStateStore stateStore, HttpClient httpClient, string? table = null)
+    public RaftNode(RaftOptions options, RaftStateStore stateStore, HttpClient httpClient, string? table = null, ILogger<RaftNode>? logger = null)
     {
         _options = options;
         _stateStore = stateStore;
         _httpClient = httpClient;
         _table = string.IsNullOrWhiteSpace(table) ? null : Storage.TableNames.Normalize(table);
+        _logger = logger;
     }
 
     public void UpdatePeers(IReadOnlyList<RaftPeerOptions> peers)
@@ -46,6 +49,12 @@ public sealed class RaftNode
     }
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        lock (_mutex)
+        {
+            if (_started)
+                return;
+        }
+
         if (!_options.Enabled)
         {
             lock (_mutex)
@@ -270,6 +279,7 @@ public sealed class RaftNode
         await _stateStore.WriteStateAsync(new RaftPersistentState(term, _options.NodeId), cancellationToken);
 
         var votes = 1;
+        _logger?.LogInformation("raft election started table={Table} node={NodeId} term={Term} majority={Majority}", _table ?? "global", _options.NodeId, term, _options.Majority);
         foreach (var peer in _options.Peers)
         {
             if (await RequestPeerVoteAsync(peer, term, cancellationToken))
@@ -283,6 +293,16 @@ public sealed class RaftNode
                 return;
             }
         }
+
+        lock (_mutex)
+        {
+            if (_currentTerm == term && _role == RaftRole.Candidate)
+            {
+                _role = RaftRole.Follower;
+                _lastHeartbeatAt = DateTimeOffset.UtcNow;
+            }
+        }
+        _logger?.LogWarning("raft election lost table={Table} node={NodeId} term={Term} votes={Votes} majority={Majority}", _table ?? "global", _options.NodeId, term, votes, _options.Majority);
     }
 
     private async Task<bool> RequestPeerVoteAsync(RaftPeerOptions peer, long term, CancellationToken cancellationToken)
@@ -379,6 +399,7 @@ public sealed class RaftNode
             _leaderId = _options.NodeId;
             _lastHeartbeatAt = DateTimeOffset.UtcNow;
         }
+        _logger?.LogInformation("raft leader elected table={Table} node={NodeId} term={Term}", _table ?? "global", _options.NodeId, term);
     }
 
     private async Task StepDownAsync(long term, string? leaderId, CancellationToken cancellationToken)

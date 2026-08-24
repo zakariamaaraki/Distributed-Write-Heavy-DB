@@ -80,6 +80,11 @@ public sealed class TransactionManager
         return buffer.TryStage(TransactionWrite.Delete(normalizedTable, key), out transaction);
     }
 
+    public TransactionInfo Register(Guid transactionId)
+    {
+        var buffer = _transactions.GetOrAdd(transactionId, TransactionBuffer.Create);
+        return buffer.ToInfo();
+    }
     public async Task<TransactionValueRead> GetAsync(Guid transactionId, string key)
     {
         return await GetAsync(transactionId, TableNames.Default, key);
@@ -186,6 +191,10 @@ public sealed class TransactionManager
         return new TransactionCommit(transactionId, operations.Count);
     }
 
+    public IReadOnlyList<StoreWriteOperation>? Snapshot(Guid transactionId)
+    {
+        return GetOperations(transactionId);
+    }
     public bool Rollback(Guid transactionId)
     {
         if (!_transactions.TryGetValue(transactionId, out var buffer))
@@ -305,6 +314,10 @@ internal sealed class TransactionBuffer
         return new TransactionBuffer(Guid.NewGuid(), DateTimeOffset.UtcNow);
     }
 
+    public static TransactionBuffer Create(Guid id)
+    {
+        return new TransactionBuffer(id, DateTimeOffset.UtcNow);
+    }
     public TransactionInfo ToInfo()
     {
         lock (_mutex)

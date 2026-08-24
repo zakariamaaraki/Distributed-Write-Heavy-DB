@@ -3,8 +3,8 @@ x-lsm-node-env: &lsm-node-env
   Lsm__FlushThreshold: 100
   Lsm__BlockSizeBytes: 16384
   Raft__Enabled: "true"
-  Raft__ElectionTimeoutMinMilliseconds: 800
-  Raft__ElectionTimeoutMaxMilliseconds: 1600
+  Raft__ElectionTimeoutMinMilliseconds: 3000
+  Raft__ElectionTimeoutMaxMilliseconds: 6000
   Raft__HeartbeatIntervalMilliseconds: 300
   Raft__ReplicationReconnectDelayMilliseconds: 500
 

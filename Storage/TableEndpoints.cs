@@ -7,9 +7,26 @@ public static class TableEndpoints
 {
     public static WebApplication MapTableEndpoints(this WebApplication app)
     {
-        app.MapGet("/tables", async (DatabaseEngine db) => Results.Ok(await db.ListTablesAsync()));
+        app.MapGet("/tables", async (DatabaseEngine db, TableRaftCoordinator coordinator) =>
+        {
+            var tables = await db.ListTablesAsync();
+            var result = tables.Select(table =>
+            {
+                var status = coordinator.GetStatus(table.Name);
+                return new
+                {
+                    name = table.Name,
+                    table = table.Name,
+                    leaderId = status.LeaderId,
+                    leaderUrl = status.LeaderUrl,
+                    role = status.Role.ToString(),
+                    term = status.CurrentTerm
+                };
+            });
+            return Results.Ok(result);
+        });
 
-        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftRoleGuard tableRaft) =>
+        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftRoleGuard tableRaft, TableRaftCoordinator coordinator) =>
         {
             var targetTable = table;
             if (!tableRaft.CanAcceptWrites(targetTable))

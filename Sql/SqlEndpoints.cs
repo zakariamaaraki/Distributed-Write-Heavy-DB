@@ -42,6 +42,18 @@ public static class SqlEndpoints
                     },
                     statusCode: StatusCodes.Status409Conflict);
             }
+            catch (TableWriteRejectedException ex)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = ex.Message,
+                        table = ex.Table,
+                        leaderId = ex.LeaderId,
+                        leaderUrl = ex.LeaderUrl
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
             catch (ArgumentException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });

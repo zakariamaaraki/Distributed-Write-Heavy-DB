@@ -28,7 +28,7 @@ sealed class LeaderRouter
     private readonly string _localNode;
     private readonly IReadOnlyDictionary<string, string> _nodes;
     private readonly ConcurrentDictionary<string, string> _leaders = new(StringComparer.OrdinalIgnoreCase);
-
+    private readonly ConcurrentDictionary<Guid, string> _transactionCoordinators = new();
     public LeaderRouter()
     {
         _localNode = Environment.GetEnvironmentVariable("ROUTER_DATABASE_URL")?.TrimEnd('/')
@@ -57,7 +57,13 @@ sealed class LeaderRouter
             context.Request.Body.Position = 0;
         }
         var table = await ResolveTableAsync(context, cancellationToken);
-        var target = await ResolveLeaderAsync(table, cancellationToken);
+        var requestTransactionId = TryReadTransactionId(requestBody);
+        var statement = TryReadSqlStatement(requestBody);
+        var target = statement is "COMMIT" or "ROLLBACK"
+            && requestTransactionId is Guid completionId
+            && _transactionCoordinators.TryGetValue(completionId, out var coordinator)
+                ? coordinator
+                : await ResolveLeaderAsync(table, cancellationToken);
         var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target + context.Request.PathBase + context.Request.Path + context.Request.QueryString);
         foreach (var header in context.Request.Headers)
         {
@@ -91,9 +97,87 @@ sealed class LeaderRouter
         context.Response.ContentLength = body.Length;
         context.Response.StatusCode = (int)response.StatusCode;
         await context.Response.Body.WriteAsync(body, cancellationToken);
+        if (response.IsSuccessStatusCode
+            && string.Equals(context.Request.Path, "/sql", StringComparison.OrdinalIgnoreCase))
+        {
+            await RememberTransactionAsync(body, target, cancellationToken);
+        }
         return Results.Empty;
     }
 
+    private async Task RememberTransactionAsync(byte[] body, string coordinator, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("transactionId", out var value)
+                || value.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(value.GetString(), out var id))
+                return;
+
+            var statement = root.TryGetProperty("statementType", out var type)
+                ? type.GetString()
+                : null;
+            if (statement is "COMMIT" or "ROLLBACK")
+            {
+                _transactionCoordinators.TryRemove(id, out _);
+                await ForgetTransactionAsync(id, cancellationToken);
+                return;
+            }
+
+            _transactionCoordinators[id] = coordinator;
+            foreach (var node in new[] { _localNode }.Concat(_nodes.Values).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using var response = await _client.PostAsync(
+                        $"{node}/transactions/{id}/register", content: null, cancellationToken);
+                }
+                catch (HttpRequestException) { }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+            }
+        }
+        catch (JsonException) { }
+    }
+
+    private async Task ForgetTransactionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        foreach (var node in new[] { _localNode }.Concat(_nodes.Values).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var response = await _client.DeleteAsync(
+                    $"{node}/transactions/{id}/register", cancellationToken);
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+    }
+
+    private static Guid? TryReadTransactionId(byte[]? body)
+    {
+        if (body is null) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var value = document.RootElement.GetProperty("transactionId");
+            return value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var id) ? id : null;
+        }
+        catch (Exception) when (body is not null) { return null; }
+    }
+
+    private static string? TryReadSqlStatement(byte[]? body)
+    {
+        if (body is null) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var query = document.RootElement.GetProperty("query").GetString() ?? string.Empty;
+            return Regex.Match(query.Trim(), "^(BEGIN|COMMIT|ROLLBACK)", RegexOptions.IgnoreCase).Value.ToUpperInvariant();
+        }
+        catch (Exception) when (body is not null) { return null; }
+    }
     public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken)
     {
         var nodes = new[] { (Id: Environment.GetEnvironmentVariable("ROUTER_NODE_ID") ?? "local", Url: _localNode) }.Concat(_nodes.Select(pair => (Id: pair.Key, Url: pair.Value))).ToList();
@@ -106,7 +190,11 @@ sealed class LeaderRouter
                 using var response = await _client.GetAsync(node.Url + "/tables", cancellationToken);
                 response.EnsureSuccessStatusCode();
                 using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-                foreach (var table in document.RootElement.EnumerateArray()) if (table.TryGetProperty("name", out var name)) tables.Add(name.GetString() ?? string.Empty);
+                foreach (var table in document.RootElement.EnumerateArray())
+                {
+                    if (table.TryGetProperty("name", out var name) || table.TryGetProperty("table", out name))
+                        tables.Add(name.GetString() ?? string.Empty);
+                }
                 nodeResults.Add(new { id = node.Id, url = node.Url, reachable = true });
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { nodeResults.Add(new { id = node.Id, url = node.Url, reachable = false, error = ex.Message }); }
@@ -128,12 +216,33 @@ sealed class LeaderRouter
     {
         if (_leaders.TryGetValue(table, out var cached))
             return cached;
-        foreach (var node in new[] { _localNode }.Concat(_nodes.Values).Distinct(StringComparer.OrdinalIgnoreCase))
+
+        var nodes = new[] { _localNode }.Concat(_nodes.Values)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var tableExists = false;
+        foreach (var node in nodes)
         {
             try
             {
-                var state = await _client.GetFromJsonAsync<RaftStatus>($"{node}/raft/tables/{Uri.EscapeDataString(table)}/state", cancellationToken);
-                if (state?.Role is 2 or "Leader" && !string.IsNullOrWhiteSpace(state.LeaderUrl))
+                var tables = await _client.GetFromJsonAsync<List<TableInfo>>($"{node}/tables", cancellationToken);
+                if (tables?.Any(item => string.Equals(item.Name, table, StringComparison.OrdinalIgnoreCase)) == true)
+                    tableExists = true;
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+
+        if (!tableExists)
+            return await SelectLeastLoadedNodeAsync(nodes, cancellationToken);
+
+        foreach (var node in nodes)
+        {
+            try
+            {
+                var state = await _client.GetFromJsonAsync<RaftStatus>(
+                    $"{node}/raft/tables/{Uri.EscapeDataString(table)}/state", cancellationToken);
+                if (state is not null && IsLeaderRole(state.Role) && !string.IsNullOrWhiteSpace(state.LeaderUrl))
                 {
                     _leaders[table] = state.LeaderUrl.TrimEnd('/');
                     return _leaders[table];
@@ -142,9 +251,56 @@ sealed class LeaderRouter
             catch (HttpRequestException) { }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
         }
-        return _localNode;
+
+        return await SelectLeastLoadedNodeAsync(nodes, cancellationToken);
     }
 
+    private async Task<string> SelectLeastLoadedNodeAsync(
+        IReadOnlyList<string> nodes,
+        CancellationToken cancellationToken)
+    {
+        var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in nodes)
+        {
+            try
+            {
+                var localTables = await _client.GetFromJsonAsync<List<TableInfo>>($"{node}/tables", cancellationToken);
+                if (localTables is not null)
+                    foreach (var table in localTables)
+                        tables.Add(table.Name);
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+
+        var leaderCounts = nodes.ToDictionary(node => node, _ => 0, StringComparer.OrdinalIgnoreCase);
+        foreach (var table in tables)
+        {
+            foreach (var node in nodes)
+            {
+                try
+                {
+                    var state = await _client.GetFromJsonAsync<RaftStatus>(
+                        $"{node}/raft/tables/{Uri.EscapeDataString(table)}/state", cancellationToken);
+                    if (state is not null && IsLeaderRole(state.Role) && !string.IsNullOrWhiteSpace(state.LeaderUrl))
+                    {
+                        var leader = nodes.FirstOrDefault(candidate =>
+                            string.Equals(candidate.TrimEnd('/'), state.LeaderUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
+                        if (leader is not null)
+                            leaderCounts[leader]++;
+                        break;
+                    }
+                }
+                catch (HttpRequestException) { }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+            }
+        }
+
+        return nodes
+            .OrderBy(node => leaderCounts[node])
+            .ThenBy(node => node, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault() ?? _localNode;
+    }
     private async Task<string> ResolveTableAsync(HttpContext context, CancellationToken cancellationToken)
     {
         var path = context.Request.Path.Value ?? string.Empty;
@@ -160,7 +316,7 @@ sealed class LeaderRouter
             var json = await reader.ReadToEndAsync(cancellationToken);
             context.Request.Body.Position = 0;
             var query = JsonDocument.Parse(json).RootElement.GetProperty("query").GetString() ?? string.Empty;
-            var sql = Regex.Match(query, "(?:FROM|INTO|UPDATE|DELETE\\s+FROM|JOIN)\\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
+            var sql = Regex.Match(query, "(?:CREATE\\s+TABLE|FROM|INTO|UPDATE|DELETE\\s+FROM|JOIN)\\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
             return sql.Success ? sql.Groups[1].Value : "kv";
         }
         return "kv";
@@ -172,6 +328,13 @@ sealed class LeaderRouter
             .Where(parts => parts.Length == 2)
             .ToDictionary(parts => parts[0].Trim(), parts => parts[1].TrimEnd('/'), StringComparer.OrdinalIgnoreCase);
 
-    private sealed record RaftStatus(string? LeaderUrl, object? Role);
+    private static bool IsLeaderRole(JsonElement role)
+    {
+        return role.ValueKind == JsonValueKind.Number && role.TryGetInt32(out var numeric) && numeric == 2
+            || role.ValueKind == JsonValueKind.String && string.Equals(role.GetString(), "Leader", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record TableInfo(string Name);
+    private sealed record RaftStatus(string? LeaderUrl, JsonElement Role);
     private sealed record MonitoringTableState(string? LeaderUrl, string? LeaderId, object? Role, long CurrentTerm);
 }

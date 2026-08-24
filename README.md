@@ -73,6 +73,8 @@ the SSE change stream. Each follower filters the shared change log by table.
 - Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
 - Per-table applied sequence tracking and SSE reconnection.
 - Table-local WALs and shared database change-log events.
+- New tables are initially placed on the healthy node with the fewest user tables.
+- Table-catalog creation is propagated to every configured peer before writes are accepted.
 - Distributed transaction coordination uses two-phase commit across the affected table leaders.
 
 ## Per-Table Leadership
@@ -96,6 +98,19 @@ for the ownership, bootstrap, failure, and rebalancing protocol.
 
 Distributed transactions use a coordinator-driven two-phase commit protocol across table leaders. Cross-table JOINs remain read-only.
 
+### Table creation and load balancing
+
+CREATE TABLE is cluster-wide. When the Router cannot discover an existing
+leader for the requested table, it counts the user tables known by each healthy
+node and sends the create request to the node with the fewest tables. That node
+creates the local store and propagates the catalog entry to all configured
+peers. Each peer initializes the table and its table-specific Raft state, so
+the table exists on every replica before distributed writes use it.
+
+If a peer is unavailable during creation, verify the table lists and monitoring
+page before using the table in a distributed transaction. Clients should use a
+Router URL rather than a database node URL.
+
 ## Router Process
 
 Each database node can run with a companion `Router` process. The Router is an
@@ -103,6 +118,8 @@ HTTP reverse proxy that keeps pooled, long-lived connections to the database
 nodes and routes requests to the current leader for the requested table.
 
 The Router:
+
+- Places new tables on the healthy node with the fewest user tables.
 
 - Discovers a table leader through `/raft/tables/{table}/state`.
 - Caches the leader URL per table to avoid discovery on every request.
@@ -184,6 +201,19 @@ curl.exe -X POST http://localhost:9081/sql `
 Applications should use the Router URL as their database endpoint and do not need to know the current table leader. If a leader election changes ownership, the Router refreshes its cached route automatically. Database ports (`8080`) remain node-to-node and direct database endpoints; client traffic should normally use the Router ports.
 
 ## Distributed transactions
+### Leader-only transaction writes
+
+Transactional writes remain owned by their table leaders. A transaction ID must
+be registered on every node so the leader of each target table can stage the
+write. At COMMIT, the coordinator gathers staged operations from the participating
+leaders and runs two-phase commit.
+
+Routing all statements to the node that received BEGIN is not sufficient, because
+that node may not lead every table in the transaction. The Router therefore
+combines transaction registration, table-leader routing, and coordinator-side
+operation collection. A transaction ID used on a node that did not create or
+register it returns transaction not found. The Router removes registrations from
+all nodes after COMMIT or ROLLBACK.
 
 Distributed transactions are supported when one transaction writes to multiple tables. A coordinator groups the staged writes by table, discovers each table leader, runs the prepare phase on every participant, and sends commit only after every participant has acknowledged prepare. Each participant applies its batch through the normal WAL, memtable, index, and change-log path.
 

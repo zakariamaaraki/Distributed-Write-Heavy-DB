@@ -1,4 +1,27 @@
 # Distributed Transactions with Two-Phase Commit
+## Table catalog prerequisite
+## SQL transaction routing
+
+The Router maintains transaction affinity. When BEGIN creates a client-visible
+transaction ID, the Router records the coordinator node that created it. Later
+SQL statements carrying that ID are forwarded to the same coordinator, even when
+their table name would otherwise route to a different table leader. The
+coordinator reads the staged write set and promotes a cross-leader COMMIT to 2PC.
+The mapping is removed after COMMIT or ROLLBACK.
+
+Clients should use one Router endpoint for the complete SQL transaction. Direct
+requests to arbitrary database-node ports do not transfer coordinator state;
+reusing a transaction ID on another node therefore returns transaction not found.
+
+Before using a distributed transaction, every participating table must exist in
+the catalog of every configured node. Table creation is a cluster-wide operation:
+the Router places a new table on the healthy node with the fewest user tables,
+then the creating node propagates the catalog entry and initializes the
+table-specific Raft state on every peer. This prevents a table leader from being
+elected on a node that cannot open the table store.
+
+If a peer is unavailable during creation, verify the table lists and monitoring
+page before using the table in a distributed transaction.
 
 ## Scope
 
@@ -143,3 +166,31 @@ unilaterally choose abort after the coordinator may have chosen commit.
 The SQL engine keeps the normal BEGIN, statement, and COMMIT contract. It exports the staged write set only at commit time. If all staged tables resolve to the same leader node, the existing local transaction path is used. If they resolve to different leader nodes, the engine creates an internal distributed transaction, copies the staged operations into it, and invokes leader discovery, prepare, commit, abort, journaling, and recovery. The SQL transaction id remains the client-visible id.
 
 A failed prepare returns an SQL error and aborts prepared participants. A phase-two failure returns an in-doubt SQL execution error.
+
+## Leader-only SQL writes
+
+A SQL transaction must preserve table-leader ownership. The transaction ID is
+not sufficient by itself to make arbitrary nodes interchangeable.
+
+The intended flow is:
+
+1. BEGIN creates a transaction ID and registers that ID on every database node.
+2. Each INSERT, UPDATE, or DELETE is routed to the leader of its target table.
+3. That leader stages the write under the shared transaction ID.
+4. At COMMIT, the coordinator collects the staged write sets from the participating
+   table leaders.
+5. The coordinator runs prepare and commit across those leaders using 2PC.
+
+A coordinator-affinity-only router is not sufficient: it would send a write for a
+second table to the first table's coordinator, violating leader-only writes.
+Direct database-node clients must use the same registration and leader-routing
+protocol; reusing an ID on an unregistered node returns transaction not found.
+
+The Router implements this protocol through `POST /transactions/{id}/register`,
+which is idempotent on every node. The coordinator reads each node's staged
+operations through `GET /transactions/{id}/operations`; an unavailable registered
+node causes collection to fail rather than allowing an incomplete write set to
+commit. After COMMIT or ROLLBACK, the Router deletes the registration from every
+node through `DELETE /transactions/{id}/register`. The transaction buffers remain
+process-local by design; the shared identity and coordinator collection are the
+cross-node protocol.

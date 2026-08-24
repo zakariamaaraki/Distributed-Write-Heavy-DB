@@ -1,4 +1,4 @@
-﻿# Per-Table Leadership and Replica Rebalancing
+# Per-Table Leadership and Replica Rebalancing
 
 ## Status
 
@@ -12,13 +12,15 @@ scope for this version.
 - Replicate each table's committed changes to that table's followers.
 - Reassign table ownership when a node joins, leaves, or becomes unavailable.
 - Persist ownership metadata in an internal replicated table.
+- Place a newly created table on the node with the fewest user tables.
+- Replicate table-catalog creation to every configured peer before writes begin.
 - Keep the internal ownership table itself under the same leader/follower model.
 - Route writes to the table leader and return its URL when a request reaches a
   follower.
 
 ## Non-goals
 
-- No distributed transactions or two-phase commit in this version.
+
 - No atomic multi-table writes.
 - No cross-table read snapshot guarantee.
 - No claim that ownership movement is complete until the destination has caught
@@ -76,6 +78,19 @@ Each table has its own Raft state:
 The existing global Raft group remains responsible for cluster membership and
 metadata bootstrap during migration. Table groups use the same peer transport,
 but maintain independent persistent state and replication cursors.
+
+## Table creation and placement
+
+CREATE TABLE is a cluster-wide catalog operation. The Router selects a healthy
+database node with the fewest user tables when no leader exists for the new
+table. The selected node creates the local store and notifies every configured
+peer through the internal table-ensure endpoint. Each peer initializes the
+same table and its table-scoped Raft state.
+
+The table is therefore present on every replica before the table leader accepts
+writes. Table placement balances the initial leader assignment by current table
+count; later elections and explicit rebalancing may move leadership. A failed
+peer notification must be resolved before relying on cross-table transactions.
 
 ## Write and read routing
 

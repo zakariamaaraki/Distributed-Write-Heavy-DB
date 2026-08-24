@@ -1,3 +1,4 @@
+using LsmWriteDb.Storage;
 namespace LsmWriteDb.Raft;
 
 public static class TableRaftEndpoints
@@ -26,6 +27,20 @@ public static class TableRaftEndpoints
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });
 
+        app.MapPost("/raft/tables/{table}/ensure", async (
+            string table,
+            DatabaseEngine database,
+            TableRaftCoordinator coordinator,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                await database.CreateTableAsync(table, cancellationToken);
+                await coordinator.EnsureTableAsync(table, cancellationToken);
+                return Results.Ok(new { table = TableNames.Normalize(table) });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        });
         app.MapPost("/raft/tables/{table}/request-vote", async (
             string table,
             RaftRequestVoteRequest request,

@@ -46,6 +46,8 @@ app.UseStaticFiles();
 
 app.MapGet("/", () => Results.Ok(new { name = "Simple LSM Write Database" }));
 
+app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
+
 app.MapTableEndpoints();
 app.MapTransactionEndpoints();
 app.MapDistributedTransactionEndpoints();

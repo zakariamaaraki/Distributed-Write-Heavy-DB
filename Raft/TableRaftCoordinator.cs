@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using LsmWriteDb.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace LsmWriteDb.Raft;
 
@@ -13,13 +14,15 @@ public sealed class TableRaftCoordinator
     private readonly ConcurrentDictionary<string, RaftNode> _nodes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _loops = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RaftPeerOptions> _members = new(StringComparer.Ordinal);
+    private readonly ILoggerFactory? _loggerFactory;
 
-    public TableRaftCoordinator(RaftOptions options, LsmStoreOptions storageOptions, HttpClient httpClient, DatabaseEngine database)
+    public TableRaftCoordinator(RaftOptions options, LsmStoreOptions storageOptions, HttpClient httpClient, DatabaseEngine database, ILoggerFactory? loggerFactory = null)
     {
         _options = options;
         _storageOptions = storageOptions;
         _httpClient = httpClient;
         _database = database;
+        _loggerFactory = loggerFactory;
         foreach (var peer in options.Peers)
             _members[peer.NodeId] = peer;
     }
@@ -44,7 +47,7 @@ public sealed class TableRaftCoordinator
 
         var node = _nodes.GetOrAdd(normalized, CreateNode);
         await node.InitializeAsync(cancellationToken);
-        _ = _loops.GetOrAdd(normalized, _ => node.RunElectionLoopAsync(cancellationToken));
+        _ = _loops.GetOrAdd(normalized, _ => node.RunElectionLoopAsync(CancellationToken.None));
         if (!TableNames.IsInternal(normalized))
             await PersistOwnershipAsync(normalized, node.GetStatus(), cancellationToken);
     }
@@ -73,7 +76,7 @@ public sealed class TableRaftCoordinator
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(TimeSpan.FromSeconds(2));
-                using var response = await _httpClient.GetAsync(peer.Url.TrimEnd('/') + "/", timeout.Token);
+                using var response = await _httpClient.GetAsync(peer.Url.TrimEnd('/') + "/health", timeout.Token);
                 if (response.IsSuccessStatusCode)
                     healthy.Add(peer);
             }
@@ -82,12 +85,8 @@ public sealed class TableRaftCoordinator
         }
 
         var healthyIds = healthy.Select(peer => peer.NodeId).ToHashSet(StringComparer.Ordinal);
-        foreach (var member in _members.Keys)
-        {
-            if (member != _options.NodeId && !healthyIds.Contains(member))
-                _members.TryRemove(member, out _);
-        }
-        var currentPeers = _members.Values.Where(peer => peer.NodeId != _options.NodeId).ToList();
+        // Keep configured peers in the membership view; startup health checks are transient.
+var currentPeers = _members.Values.Where(peer => peer.NodeId != _options.NodeId).ToList();
         foreach (var node in _nodes.Values)
             node.UpdatePeers(currentPeers);
         var names = tables.Select(table => table.Name).ToList();
@@ -98,6 +97,23 @@ public sealed class TableRaftCoordinator
                 await _database.PutAsync(TableNames.Ownership, record.Table, JsonSerializer.Serialize(record));
         }
         return planned;
+    }
+    public async Task EnsureTableOnPeersAsync(string table, CancellationToken cancellationToken = default)
+    {
+        var normalized = TableNames.Normalize(table);
+        foreach (var peer in _members.Values)
+        {
+            try
+            {
+                using var response = await _httpClient.PostAsync(
+                    $"{peer.Url.TrimEnd('/')}/raft/tables/{Uri.EscapeDataString(normalized)}/ensure",
+                    content: null,
+                    cancellationToken);
+                response.EnsureSuccessStatusCode();
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
     }
     public bool IsLeader(string table)
     {
@@ -163,7 +179,7 @@ public sealed class TableRaftCoordinator
             ReplicationReconnectDelayMilliseconds = _options.ReplicationReconnectDelayMilliseconds,
             Peers = _members.Values.Where(peer => peer.NodeId != _options.NodeId).ToList()
         };
-        return new RaftNode(tableOptions, new RaftStateStore(stateOptions), _httpClient, table);
+        return new RaftNode(tableOptions, new RaftStateStore(stateOptions), _httpClient, table, _loggerFactory?.CreateLogger<RaftNode>());
     }
 }
 
