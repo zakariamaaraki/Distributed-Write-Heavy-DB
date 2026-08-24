@@ -45,6 +45,7 @@ This document is organized from the distributed architecture down to the storage
   replay changes or subscribe over Server-Sent Events from a known sequence
   number.
 - Run independent Raft elections per table, with one leader and multiple followers per table.
+- Do not acknowledge table creation until the table has a discoverable elected leader.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
 
@@ -115,8 +116,10 @@ CREATE TABLE is cluster-wide. When the Router cannot discover an existing
 leader for the requested table, it counts the user tables known by each healthy
 node and sends the create request to the node with the fewest tables. That node
 creates the local store and propagates the catalog entry to all configured
-peers. Each peer initializes the table and its table-specific Raft state, so
-the table exists on every replica before distributed writes use it.
+peers. Each peer initializes the table and its table-specific Raft state. Creation then waits
+for a discoverable elected leader before returning success, so the table exists on
+every replica and is ready for distributed writes. If the bounded readiness timeout
+expires, creation returns `503 Service Unavailable` and clients should retry.
 
 If a peer is unavailable during creation, verify the table lists and monitoring
 page before using the table in a distributed transaction. Clients should use a

@@ -43,6 +43,7 @@ public sealed class RaftNode
                 ElectionTimeoutMaxMilliseconds = _options.ElectionTimeoutMaxMilliseconds,
                 HeartbeatIntervalMilliseconds = _options.HeartbeatIntervalMilliseconds,
                 ReplicationReconnectDelayMilliseconds = _options.ReplicationReconnectDelayMilliseconds,
+                LeaderElectionReadyTimeoutMilliseconds = _options.LeaderElectionReadyTimeoutMilliseconds,
                 Peers = peers.ToList()
             };
         }

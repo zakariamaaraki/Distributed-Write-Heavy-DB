@@ -18,6 +18,10 @@ public static class SqlEndpoints
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
+            catch (SqlExecutionException ex) when (ex.StatusCode == StatusCodes.Status503ServiceUnavailable)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: ex.StatusCode);
+            }
             catch (SqlExecutionException ex) when (ex.StatusCode == StatusCodes.Status404NotFound)
             {
                 return Results.NotFound(new { error = ex.Message });

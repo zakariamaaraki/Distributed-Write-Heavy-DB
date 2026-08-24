@@ -16,6 +16,8 @@ public sealed class RaftOptions
 
     public int ReplicationReconnectDelayMilliseconds { get; init; } = 1_000;
 
+    public int LeaderElectionReadyTimeoutMilliseconds { get; init; } = 15_000;
+
     public IReadOnlyList<RaftPeerOptions> Peers { get; init; } = [];
 
     public int ClusterSize => Peers.Count + 1;

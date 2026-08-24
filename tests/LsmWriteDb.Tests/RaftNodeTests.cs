@@ -193,6 +193,8 @@ public sealed class RaftNodeTests
             var coordinator = new TableRaftCoordinator(raftOptions, options, httpClient, database);
 
             await coordinator.EnsureTableAsync("users");
+            var ready = await coordinator.WaitForLeaderAsync("users");
+            Assert.NotNull(ready);
 
             var ownership = await database.GetAsync(TableNames.Ownership, "users");
             Assert.NotNull(ownership);

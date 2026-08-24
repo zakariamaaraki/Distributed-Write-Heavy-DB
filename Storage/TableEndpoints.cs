@@ -26,20 +26,21 @@ public static class TableEndpoints
             return Results.Ok(result);
         });
 
-        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftRoleGuard tableRaft, TableRaftCoordinator coordinator) =>
+        app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftCoordinator coordinator, CancellationToken cancellationToken) =>
         {
-            var targetTable = table;
-            if (!tableRaft.CanAcceptWrites(targetTable))
-            {
-                return tableRaft.WriteRejectedResult(targetTable);
-            }
-
             try
             {
-                var created = await db.CreateTableAsync(table);
-                return created
-                    ? Results.Created($"/tables/{TableNames.Normalize(table)}", new { table = TableNames.Normalize(table) })
-                    : Results.Ok(new { table = TableNames.Normalize(table), message = "table already exists" });
+                var created = await db.CreateTableAsync(table, cancellationToken);
+                await coordinator.EnsureTableAsync(table, cancellationToken);
+                if (created)
+                    await coordinator.EnsureTableOnPeersAsync(table, cancellationToken);
+
+                var ready = await coordinator.WaitForLeaderAsync(table, cancellationToken);
+                return ready is null
+                    ? Results.Json(new { error = "table leader election is not ready" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : created
+                        ? Results.Created($"/tables/{TableNames.Normalize(table)}", new { table = TableNames.Normalize(table), leaderId = ready.LeaderId, leaderUrl = ready.LeaderUrl, term = ready.CurrentTerm })
+                        : Results.Ok(new { table = TableNames.Normalize(table), message = "table already exists", leaderId = ready.LeaderId, leaderUrl = ready.LeaderUrl, term = ready.CurrentTerm });
             }
             catch (ArgumentException ex)
             {

@@ -37,7 +37,10 @@ public static class TableRaftEndpoints
             {
                 await database.CreateTableAsync(table, cancellationToken);
                 await coordinator.EnsureTableAsync(table, cancellationToken);
-                return Results.Ok(new { table = TableNames.Normalize(table) });
+                var ready = await coordinator.WaitForLeaderAsync(table, cancellationToken);
+                return ready is null
+                    ? Results.Json(new { error = "table leader election is not ready" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : Results.Ok(new { table = TableNames.Normalize(table), leaderId = ready.LeaderId, leaderUrl = ready.LeaderUrl, term = ready.CurrentTerm });
             }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });

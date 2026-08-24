@@ -382,10 +382,15 @@ public sealed class SqlEngine
         }
 
         var created = await _database.CreateTableAsync(statement.Table);
-        if (created && _tableCoordinator is not null)
+        if (_tableCoordinator is not null)
         {
             await _tableCoordinator.EnsureTableAsync(statement.Table);
-            await _tableCoordinator.EnsureTableOnPeersAsync(statement.Table);
+            if (created)
+                await _tableCoordinator.EnsureTableOnPeersAsync(statement.Table);
+
+            var ready = await _tableCoordinator.WaitForLeaderAsync(statement.Table);
+            if (ready is null)
+                throw new SqlExecutionException("table leader election is not ready", StatusCodes.Status503ServiceUnavailable);
         }
         return SqlExecutionResult.Acknowledged(
             "CREATE TABLE",

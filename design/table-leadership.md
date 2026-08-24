@@ -115,6 +115,19 @@ Direct database-node requests bypass the Router and read the local replica. A
 follower can be briefly stale while its table change stream catches up, so clients
 that require a selected consistency level should use a Router endpoint. Router reads
 include `X-Read-From` so the selected database node is observable.
+## Table creation readiness
+
+Table creation initializes the table's local store and table-specific Raft state on
+the selected node and configured peers. The create operation then waits until the
+table has a discoverable leader (`leaderId`, leader URL, and an elected role) before
+returning success. This prevents clients from immediately issuing writes while the
+table election is still in progress.
+
+The wait is bounded by `Raft:LeaderElectionReadyTimeoutMilliseconds` (15 seconds by
+default). A timeout returns `503 Service Unavailable`; the table may already exist and
+a later create request retries readiness. Peer initialization uses the same wait but
+does not recursively propagate creation.
+
 ## Replication and rebalancing
 
 Each table leader appends committed writes to the table WAL and publishes a

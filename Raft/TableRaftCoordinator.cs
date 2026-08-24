@@ -115,6 +115,24 @@ var currentPeers = _members.Values.Where(peer => peer.NodeId != _options.NodeId)
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
         }
     }
+    public async Task<RaftNodeStatus?> WaitForLeaderAsync(string table, CancellationToken cancellationToken = default)
+    {
+        await EnsureTableAsync(table, cancellationToken);
+        var timeout = TimeSpan.FromMilliseconds(Math.Max(1_000, _options.LeaderElectionReadyTimeoutMilliseconds));
+        var deadline = DateTimeOffset.UtcNow + timeout;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var status = GetStatus(table);
+            if (status.LeaderId is not null && (status.Role == RaftRole.Leader || status.LeaderUrl is not null))
+                return status;
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+        }
+
+        return null;
+    }
+
     public bool IsLeader(string table)
     {
         return !_options.Enabled || GetNode(table).IsLeader;
