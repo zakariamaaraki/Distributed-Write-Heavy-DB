@@ -13,13 +13,15 @@ var dataPath = Path.Combine(builder.Environment.ContentRootPath, "data");
 var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
 var blockSizeBytes = builder.Configuration.GetValue("Lsm:BlockSizeBytes", LsmStoreOptions.DefaultBlockSizeBytes);
 var maxSstableFileSizeBytes = builder.Configuration.GetValue("Lsm:MaxSstableFileSizeBytes", LsmStoreOptions.DefaultMaxSstableFileSizeBytes);
+var changeLogSegmentMaxBytes = builder.Configuration.GetValue("Lsm:ChangeLogSegmentMaxBytes", LsmStoreOptions.DefaultChangeLogSegmentMaxBytes);
 var raftOptions = builder.Configuration.GetSection("Raft").Get<RaftOptions>() ?? new RaftOptions();
 
 builder.Services.AddSingleton(new LsmStoreOptions(
     dataPath,
     flushThreshold,
     BlockSizeBytes: blockSizeBytes,
-    MaxSstableFileSizeBytes: maxSstableFileSizeBytes));
+    MaxSstableFileSizeBytes: maxSstableFileSizeBytes,
+    ChangeLogSegmentMaxBytes: changeLogSegmentMaxBytes));
 builder.Services.AddSingleton<ChangeLogService>();
 builder.Services.AddSingleton<DatabaseEngine>();
 builder.Services.AddSingleton<TransactionManager>();

@@ -10,10 +10,12 @@ public sealed record LsmStoreOptions(
     int FlushThreshold,
     string TableName = TableNames.Default,
     int BlockSizeBytes = LsmStoreOptions.DefaultBlockSizeBytes,
-    int MaxSstableFileSizeBytes = LsmStoreOptions.DefaultMaxSstableFileSizeBytes)
+    int MaxSstableFileSizeBytes = LsmStoreOptions.DefaultMaxSstableFileSizeBytes,
+    int ChangeLogSegmentMaxBytes = LsmStoreOptions.DefaultChangeLogSegmentMaxBytes)
 {
     public const int DefaultBlockSizeBytes = SstableStore.DefaultBlockSizeBytes;
     public const int DefaultMaxSstableFileSizeBytes = SstableStore.DefaultMaxFileSizeBytes;
+    public const int DefaultChangeLogSegmentMaxBytes = 64 * 1024 * 1024;
 }
 
 public sealed record KeyValueRow(string Key, string Value);

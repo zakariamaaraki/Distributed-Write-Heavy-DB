@@ -810,8 +810,13 @@ left by a crash and is ignored instead of being replayed.
 
 ### Change Log Stream
 
-Committed writes from all tables are also appended to `data/changelog.log` as
-change-log events. The change log is separate from the WAL: the WAL protects local crash recovery, while the change log provides a durable, ordered source that followers and other consumers can replay. Each event contains the global committed sequence number,
+Committed writes from all tables are also appended as JSONL events to bounded
+`data/changelog-000000000000000000NN.log` segments. The change log is separate
+from the WAL: the WAL protects local crash recovery, while the change log provides
+a durable, ordered source that followers and other consumers can replay. Existing
+`data/changelog.log` files remain readable for backward compatibility. When the
+active segment reaches its size limit, the next event starts the next numbered
+segment; an event is never split between files. Each event contains the global committed sequence number,
 table, operation, key, value, tombstone flag, and commit timestamp. Direct
 `PUT`/`DELETE`, SQL writes, and transaction commits all publish through the same
 log because they all eventually call the storage engine write path.
@@ -842,8 +847,10 @@ event: change
 data: {"sequence":121,"operation":"put","key":"user:1001","value":"Ada","isDeleted":false,"committedAt":"2026-05-19T12:00:00Z","table":"users"}
 ```
 
+![Segmented change-log tree](./docs/change-log-segment-tree.svg?raw=true)
+
 The browser UI at /changes-console can replay or subscribe to the same stream
- and display events in a table.
+and display events in a table.
 
 The server sends an SSE comment heartbeat (: heartbeat) every 15 seconds while
 the connection is idle. Heartbeats keep proxies and load balancers from treating
@@ -1056,21 +1063,23 @@ A physical SSTable file contains multiple blocks; a block is not itself an SSTab
 
 ```text
 SSTable run
-├── sstable-001
-│   ├── block 1
-│   ├── block 2
-│   └── sparse index + Bloom filter
-├── sstable-002
-│   ├── block 3
-│   ├── block 4
-│   └── sparse index + Bloom filter
++-- sstable-001
+|   +-- block 1
+|   +-- block 2
+|   +-- sparse index + Bloom filter
++-- sstable-002
+    +-- block 3
+    +-- block 4
+    +-- sparse index + Bloom filter
 ```
 
 The block size is configurable with `Lsm:BlockSizeBytes` or the
 `Lsm__BlockSizeBytes` environment variable. The maximum physical file size is
 configurable with `Lsm:MaxSstableFileSizeBytes` or
-`Lsm__MaxSstableFileSizeBytes`. Defaults are `16384` bytes per block and
-`67108864` bytes per physical SSTable file. These are targets: a single record
+`Lsm__MaxSstableFileSizeBytes`. The change-log segment size is configurable with
+`Lsm:ChangeLogSegmentMaxBytes` or `Lsm__ChangeLogSegmentMaxBytes`. Defaults are
+`16384` bytes per block and `67108864` bytes per SSTable or change-log segment.
+These are targets: a single record
 or block is never split, so an oversized record may exceed the file target.
 
 ### Sparse Index
@@ -1156,7 +1165,8 @@ Runtime data lives under `data/`:
   next page id, and order.
 - `data/indexes/{index}/pages/page-*.json`: disk-backed B+ tree pages for that
   index.
-- `data/changelog.log`: durable committed change-log events used for follower catch-up and live streaming subscriptions.
+- `data/changelog.log`: legacy durable change-log file, still read during upgrade.
+- `data/changelog-*.log`: bounded numbered change-log segments; replay walks them in sequence order and the newest segment receives appends.
 - `data/raft-state.json`: persisted Raft term and vote.
 - `data/raft-replication.json`: last leader change sequence applied by a
   follower.
@@ -1175,7 +1185,8 @@ SSTable block size can be configured in `appsettings.json`:
   "Lsm": {
     "FlushThreshold": 100,
     "BlockSizeBytes": 16384,
-    "MaxSstableFileSizeBytes": 67108864
+    "MaxSstableFileSizeBytes": 67108864,
+    "ChangeLogSegmentMaxBytes": 67108864
   }
 }
 ```

@@ -32,6 +32,28 @@ public sealed class ChangeLogServiceTests
     }
 
     [Fact]
+    public async Task PublishAsync_RotatesSegmentsAndReplaysAcrossFiles()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var options = new LsmStoreOptions(dataPath, FlushThreshold: 100, ChangeLogSegmentMaxBytes: 300);
+            var service = new ChangeLogService(options);
+            await service.PublishAsync(Enumerable.Range(1, 20)
+                .Select(sequence => Entry(sequence, "put", $"key-{sequence}", new string('x', 40)))
+                .ToArray());
+
+            var segments = Directory.GetFiles(dataPath, "changelog-*.log");
+            Assert.True(segments.Length > 1);
+            Assert.All(segments, segment => Assert.True(new FileInfo(segment).Length <= 300));
+
+            var replay = await service.ReadAfterAsync(12);
+            Assert.Equal(Enumerable.Range(13, 8), replay.Select(entry => (int)entry.Sequence));
+        }
+        finally { DeleteTempDataPath(dataPath); }
+    }
+
+    [Fact]
     public async Task StreamAsync_ReplaysExistingEntriesAndStreamsLiveEntries()
     {
         var dataPath = CreateTempDataPath();
