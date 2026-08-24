@@ -318,6 +318,7 @@ Submit SQL with:
 Supported statements:
 
 - `CREATE TABLE users`
+- `SHOW TABLES` (returns `table`, `leader`, and `leaderUrl` columns)
 - `CREATE TABLE IF NOT EXISTS users`
 - `CREATE INDEX idx_users_tier ON users (value.tier)`
 - `BEGIN` or `BEGIN TRANSACTION`

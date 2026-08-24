@@ -55,6 +55,7 @@ public sealed class SqlEngine
             and not SqlBeginStatement
             and not SqlCommitStatement
             and not SqlRollbackStatement
+            and not SqlShowTablesStatement
             and not SqlCreateTableStatement)
         {
             if (_tableRoleGuard is not null)
@@ -68,6 +69,7 @@ public sealed class SqlEngine
             SqlBeginStatement => Begin(),
             SqlCommitStatement => await CommitAsync(request.TransactionId),
             SqlRollbackStatement => Rollback(request.TransactionId),
+            SqlShowTablesStatement => await ShowTablesAsync(),
             SqlCreateTableStatement create => await CreateTableAsync(create),
             SqlCreateIndexStatement createIndex => await CreateIndexAsync(createIndex),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
@@ -90,6 +92,26 @@ public sealed class SqlEngine
             _ => TableNames.Default
         };
     }
+    private async Task<SqlExecutionResult> ShowTablesAsync()
+    {
+        var tableInfos = _database is not null
+            ? await _database.ListTablesAsync()
+            : [new TableInfo(TableNames.Default)];
+        var rows = tableInfos
+            .Select(table =>
+            {
+                var status = _tableCoordinator?.GetStatus(table.Name);
+                return (IReadOnlyDictionary<string, string>)new Dictionary<string, string>
+                {
+                    ["table"] = table.Name,
+                    ["leader"] = status?.LeaderId ?? string.Empty,
+                    ["leaderUrl"] = status?.LeaderUrl ?? string.Empty
+                };
+            })
+            .ToList();
+        return SqlExecutionResult.WithRows("SHOW TABLES", rows);
+    }
+
     private SqlExecutionResult Begin()
     {
         var transaction = _transactions.Begin();

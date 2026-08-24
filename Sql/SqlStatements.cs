@@ -37,6 +37,8 @@ internal sealed record SqlCommitStatement() : SqlStatement("COMMIT");
 
 internal sealed record SqlRollbackStatement() : SqlStatement("ROLLBACK");
 
+internal sealed record SqlShowTablesStatement() : SqlStatement("SHOW TABLES");
+
 internal sealed record SqlCreateTableStatement(string Table) : SqlStatement("CREATE TABLE");
 
 internal sealed record SqlCreateIndexStatement(

@@ -39,6 +39,12 @@ internal sealed class SqlParser
             return new SqlRollbackStatement();
         }
 
+        if (MatchKeyword("SHOW"))
+        {
+            ExpectKeyword("TABLES");
+            return new SqlShowTablesStatement();
+        }
+
         if (MatchKeyword("CREATE"))
         {
             return ParseCreate();
@@ -64,7 +70,7 @@ internal sealed class SqlParser
             return ParseDelete();
         }
 
-        throw Error("Expected BEGIN, COMMIT, ROLLBACK, CREATE, INSERT, SELECT, UPDATE, or DELETE.");
+        throw Error("Expected BEGIN, COMMIT, ROLLBACK, SHOW TABLES, CREATE, INSERT, SELECT, UPDATE, or DELETE.");
     }
 
     private SqlStatement ParseCreate()

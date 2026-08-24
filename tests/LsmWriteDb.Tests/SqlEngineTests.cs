@@ -421,6 +421,32 @@ public sealed class SqlEngineTests
             DeleteTempDataPath(dataPath);
         }
     }
+    [Fact]
+    public async Task ExecuteAsync_ShowTablesReturnsTablesAndLeaderColumns()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE accounts", null));
+
+            var result = await engine.ExecuteAsync(new SqlQueryRequest("SHOW TABLES", null));
+
+            Assert.Equal("SHOW TABLES", result.StatementType);
+            Assert.Equal(["accounts", "kv", "users"], result.Rows.Select(row => row["table"]));
+            Assert.All(result.Rows, row =>
+            {
+                Assert.True(row.ContainsKey("leader"));
+                Assert.True(row.ContainsKey("leaderUrl"));
+            });
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);
