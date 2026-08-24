@@ -98,24 +98,23 @@ peer notification must be resolved before relying on cross-table transactions.
 2. The node reads the committed ownership record.
 3. A write is accepted only if the node is the table leader.
 4. A follower returns a redirect/rejection containing `leaderUrl` and `term`.
-5. The Router routes reads to the current table leader; direct node reads use the
-   local replica and may be stale on followers.
+5. The Router load-balances ordinary reads across healthy replicas by default;
+   `X-Read-Consistency: strong` and transactional reads use the table leader.
 6. SQL statements that touch multiple tables use the distributed transaction
    coordinator when they write. The coordinator prepares and commits each table
    leader, while reads are routed to the relevant table leader.
 
 ## Read routing and consistency
 
-The Router resolves the requested table and forwards both reads and writes to its
-current leader. Non-transactional reads return committed leader state. A
-transactional read carrying the transaction ID is also sent to the table leader,
-where it can overlay that leader's staged, uncommitted writes. Staged writes stay
-in leader memory and are not published to followers or the change log before
-COMMIT.
+The Router resolves the requested table and forwards writes and transactional reads to
+its current leader. Ordinary reads use healthy replica load balancing by default;
+`X-Read-Consistency: strong` selects the table leader. A transactional read carrying
+the transaction ID always reaches the table leader, where it can overlay staged writes.
 
 Direct database-node requests bypass the Router and read the local replica. A
 follower can be briefly stale while its table change stream catches up, so clients
-that require leader-consistent reads should use a Router endpoint.
+that require a selected consistency level should use a Router endpoint. Router reads
+include `X-Read-From` so the selected database node is observable.
 ## Replication and rebalancing
 
 Each table leader appends committed writes to the table WAL and publishes a

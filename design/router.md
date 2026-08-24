@@ -4,8 +4,9 @@
 
 The Router is a sidecar process that runs alongside each database node. Applications
 send requests to the local Router instead of needing to know which replica currently
-owns a table. The Router discovers table ownership and forwards each request to the
-current leader for that table.
+owns a table. The Router discovers table ownership and routes writes and transactional reads to the
+current leader. Ordinary reads use load-balanced healthy replicas by default, while
+`X-Read-Consistency: strong` selects the current table leader.
 
 The Router is an HTTP reverse proxy and does not store database data or participate in
 Raft elections. The database nodes remain responsible for replication, elections,
@@ -13,11 +14,12 @@ storage, and transaction processing.
 
 ## Read consistency
 
-The Router routes reads as well as writes to the current table leader. A
-non-transactional read returns committed leader state. A transactional read carrying
-its transaction ID reaches the leader and can see that leader's staged writes.
-Direct database-node requests bypass the Router and may read a follower that is
-briefly behind while it catches up from the leader's change stream.
+The Router defaults ordinary reads to healthy replica load balancing. A read with
+`X-Read-Consistency: strong` goes to the current table leader. A transactional read
+carrying its transaction ID always reaches the relevant table leader and can see that
+leader's staged writes. Every Router-served read returns `X-Read-From` with the
+selected database node URL. Direct database-node requests bypass Router routing and
+may read a follower that is briefly behind.
 
 ## Deployment
 
@@ -107,4 +109,4 @@ the workload.
 The Router serves `/monitoring`, a browser page that polls `/monitoring/api/status` every three seconds. It aggregates configured node reachability, table discovery, and each node's table Raft role, term, leader id, and leader URL. This gives operators a live view of per-table ownership during elections and rebalancing without routing or mutating data.
 ## SQL console routing
 
-The Router exposes the database's existing SQL console at `/sql-console`. The page and its static assets are served through the Router, while browser `POST /sql` calls are table-routed by inspecting the SQL table reference and resolving that table's current leader. Users keep one Router URL and do not need to select a database node manually.
+The Router exposes the database's existing SQL console at `/sql-console`. The page and its static assets are served through the Router. Browser `POST /sql` calls use the selected consistency level, and read responses expose `X-Read-From`. Users keep one Router URL and do not need to select a database node manually.

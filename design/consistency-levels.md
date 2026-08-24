@@ -29,7 +29,10 @@ The Router discovers the current leader for the requested table and forwards the
 read there. If no leader is available, the strong read fails instead of silently
 falling back to a follower.
 
-The header applies to point reads, range reads, and SQL `SELECT` requests. Writes,
+The header applies to point reads, range reads, and SQL `SELECT` requests.
+Router-served reads also return `X-Read-From` with the selected database node URL, so
+clients can observe whether an eventual read used a follower or a strong/transactional
+read used the leader. Writes,
 DDL, and transaction control are always routed according to their existing leader
 or coordinator rules.
 

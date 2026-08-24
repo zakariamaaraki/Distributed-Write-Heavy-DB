@@ -14,7 +14,10 @@ public sealed class SqlConsoleTests
         Assert.Contains("/sql-console/sql-console.css", html);
         Assert.Contains("/sql-console/sql-console.js", html);
         Assert.Contains("fetch('/sql'", script);
+        Assert.Contains("X-Read-Consistency", script);
         Assert.Contains("id=\"transactionId\"", html);
+        Assert.Contains("id=\"readConsistency\"", html);
+        Assert.Contains("Strong (table leader)", html);
         Assert.Contains("/changes-console", html);
         Assert.Contains("CREATE INDEX idx_users_tier ON users (value.tier)", html);
         Assert.Contains("SELECT key, value FROM users WHERE value.tier = 'gold' LIMIT 50", html);

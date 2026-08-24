@@ -1,6 +1,8 @@
 const editor = document.getElementById('queryEditor');
 const transactionInput = document.getElementById('transactionId');
 const transactionStatus = document.getElementById('transactionStatus');
+const readConsistency = document.getElementById('readConsistency');
+const readSource = document.getElementById('readSource');
 const serviceStatus = document.getElementById('serviceStatus');
 const resultBody = document.getElementById('resultBody');
 const statementType = document.getElementById('statementType');
@@ -52,12 +54,15 @@ async function execute(query) {
   try {
     const response = await fetch('/sql', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Read-Consistency': readConsistency.value },
       body: JSON.stringify({
         query: sql,
         transactionId: activeTransactionId()
       })
     });
+
+    const source = response.headers.get("X-Read-From") || "unknown";
+    readSource.innerHTML = `source <strong>${escapeHtml(source)}</strong>`;
 
     const payload = await response.json().catch(() => ({}));
     const elapsed = Math.max(0, Math.round(performance.now() - started));

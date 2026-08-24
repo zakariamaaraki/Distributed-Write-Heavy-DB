@@ -1,3 +1,4 @@
+using Router;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
@@ -24,11 +25,13 @@ app.Run();
 
 sealed class LeaderRouter
 {
+    private const string ReadConsistencyHeader = ReadConsistencyPolicy.HeaderName;
     private readonly HttpClient _client;
     private readonly string _localNode;
     private readonly IReadOnlyDictionary<string, string> _nodes;
     private readonly ConcurrentDictionary<string, string> _leaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _transactionCoordinators = new();
+    private long _replicaCursor;
     public LeaderRouter()
     {
         _localNode = Environment.GetEnvironmentVariable("ROUTER_DATABASE_URL")?.TrimEnd('/')
@@ -59,11 +62,22 @@ sealed class LeaderRouter
         var table = await ResolveTableAsync(context, cancellationToken);
         var requestTransactionId = TryReadTransactionId(requestBody);
         var statement = TryReadSqlStatement(requestBody);
+        var consistency = context.Request.Headers[ReadConsistencyHeader].ToString();
+        if (!ReadConsistencyPolicy.TryParse(consistency, out var consistencyLevel))
+        {
+            return Results.BadRequest(new { error = $"Unsupported {ReadConsistencyHeader} value. Use 'eventual' or 'strong'." });
+        }
+
+        var isRead = IsReadRequest(context, statement);
+        var transactionalRead = requestTransactionId is not null
+            || context.Request.Path.StartsWithSegments("/transactions");
         var target = statement is "COMMIT" or "ROLLBACK"
             && requestTransactionId is Guid completionId
             && _transactionCoordinators.TryGetValue(completionId, out var coordinator)
                 ? coordinator
-                : await ResolveLeaderAsync(table, cancellationToken);
+                : isRead && !ReadConsistencyPolicy.ShouldRouteToLeader(isRead, transactionalRead, consistencyLevel)
+                    ? await ResolveReplicaAsync(table, cancellationToken)
+                    : await ResolveLeaderAsync(table, cancellationToken);
         var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target + context.Request.PathBase + context.Request.Path + context.Request.QueryString);
         foreach (var header in context.Request.Headers)
         {
@@ -94,6 +108,8 @@ sealed class LeaderRouter
         foreach (var header in response.Content.Headers)
             if (!string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase) && !string.Equals(header.Key, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) context.Response.Headers[header.Key] = header.Value.ToArray();
         context.Response.Headers.Remove("Transfer-Encoding");
+        if (isRead)
+            context.Response.Headers["X-Read-From"] = target;
         context.Response.ContentLength = body.Length;
         context.Response.StatusCode = (int)response.StatusCode;
         await context.Response.Body.WriteAsync(body, cancellationToken);
@@ -212,6 +228,60 @@ sealed class LeaderRouter
         }
         return new { generatedAt = DateTimeOffset.UtcNow, nodes = nodeResults, tables = tableResults };
     }
+    private async Task<string> ResolveReplicaAsync(string table, CancellationToken cancellationToken)
+    {
+        var nodes = await GetHealthyReplicaCandidatesAsync(table, cancellationToken);
+        if (nodes.Count == 0)
+            return await ResolveLeaderAsync(table, cancellationToken);
+
+        var index = (int)(uint)Interlocked.Increment(ref _replicaCursor) % nodes.Count;
+        return nodes[index];
+    }
+
+    private async Task<IReadOnlyList<string>> GetHealthyReplicaCandidatesAsync(
+        string table,
+        CancellationToken cancellationToken)
+    {
+        var nodes = new[] { _localNode }.Concat(_nodes.Values)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var checks = nodes.Select(async node =>
+        {
+            try
+            {
+                using var health = await _client.GetAsync($"{node}/health", cancellationToken);
+                if (!health.IsSuccessStatusCode)
+                    return null;
+
+                // The built-in kv store is present on every database node. User
+                // tables are checked so a partially initialized replica is skipped.
+                if (string.Equals(table, "kv", StringComparison.OrdinalIgnoreCase))
+                    return node;
+
+                var tables = await _client.GetFromJsonAsync<List<TableInfo>>(
+                    $"{node}/tables", cancellationToken);
+                return tables?.Any(item => string.Equals(item.Name, table, StringComparison.OrdinalIgnoreCase)) == true
+                    ? node
+                    : null;
+            }
+            catch (HttpRequestException) { return null; }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
+        });
+
+        return (await Task.WhenAll(checks))
+            .Where(node => node is not null)
+            .Select(node => node!)
+            .ToList();
+    }
+
+    private static bool IsReadRequest(HttpContext context, string? statement)
+    {
+        if (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
+            return true;
+
+        return context.Request.Path.Equals("/sql", StringComparison.OrdinalIgnoreCase)
+            && statement is "SELECT" or "SHOW TABLES";
+    }
     private async Task<string> ResolveLeaderAsync(string table, CancellationToken cancellationToken)
     {
         if (_leaders.TryGetValue(table, out var cached))
@@ -304,6 +374,9 @@ sealed class LeaderRouter
     private async Task<string> ResolveTableAsync(HttpContext context, CancellationToken cancellationToken)
     {
         var path = context.Request.Path.Value ?? string.Empty;
+        var transactionTable = Regex.Match(path, "^/transactions/[^/]+/tables/([^/]+)", RegexOptions.IgnoreCase);
+        if (transactionTable.Success)
+            return Uri.UnescapeDataString(transactionTable.Groups[1].Value);
         var match = Regex.Match(path, "^/tables/([^/]+)", RegexOptions.IgnoreCase);
         if (match.Success)
             return Uri.UnescapeDataString(match.Groups[1].Value);

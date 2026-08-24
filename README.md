@@ -16,6 +16,8 @@ This document is organized from the distributed architecture down to the storage
 - Support point reads and range reads.
 - Support multiple read consistency levels: load-balanced eventual reads by default and
   leader-routed strong reads when requested by the client.
+- Route all transactional reads through the relevant table leader for read-your-writes,
+  while non-transactional reads follow the selected consistency level.
 - Support multiple logical tables, each with its own WAL, memtable, SSTables,
   Bloom filters, and compaction lifecycle.
 - Use Bloom filters to skip SSTables that definitely do not contain a key.
@@ -170,6 +172,8 @@ value as `X-Read-Consistency` with each SQL request. Writes and transaction cont
 remain leader/coordinator routed. Direct database-node requests bypass Router
 load balancing and read the local replica.
 
+Router-served reads include `X-Read-From` in the response headers so clients can see which database node returned the data.
+
 See [design/consistency-levels.md](./design/consistency-levels.md) for the routing
 contract and trade-offs.
 
@@ -195,7 +199,7 @@ http://localhost:9082/sql-console
 http://localhost:9083/sql-console
 ```
 
-The Router serves the console page and its JavaScript/CSS assets, then forwards the console's `POST /sql` requests. It reads the table names from the SQL statement and sends each request to the current leader for the referenced table. The browser therefore stays connected to the Router while table leadership and replica ownership remain internal cluster details.
+The Router serves the console page and its JavaScript/CSS assets, then forwards the console's `POST /sql` requests. It reads the table names from the SQL statement, applies the selected consistency level, and returns the selected node in the `X-Read-From` response header. The browser therefore stays connected to the Router while table leadership and replica ownership remain internal cluster details.
 ### Calling the database through the Router
 
 When using Docker Compose, send requests to the Router port instead of the database port:

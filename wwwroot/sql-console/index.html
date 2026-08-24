@@ -27,6 +27,14 @@
       </section>
 
       <section class="sidebar-section">
+        <label class="label" for="readConsistency">Read consistency</label>
+        <select class="consistency-select" id="readConsistency">
+          <option value="eventual" selected>Eventual (load balanced)</option>
+          <option value="strong">Strong (table leader)</option>
+        </select>
+      </section>
+
+      <section class="sidebar-section">
         <span class="label">Suggested queries</span>
         <div class="query-list">
           <button class="snippet" data-query="SHOW TABLES">SHOW TABLES</button>
@@ -65,6 +73,7 @@
         <div class="status-group">
           <span class="pill">endpoint <strong>/sql</strong></span>
           <span class="pill">table <strong>kv</strong></span>
+          <span class="pill" id="readSource">source <strong>unknown</strong></span>
           <a class="pill" href="/changes-console">changes <strong>stream</strong></a>
         </div>
       </header>
