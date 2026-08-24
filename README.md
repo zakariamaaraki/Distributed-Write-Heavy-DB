@@ -1029,6 +1029,20 @@ the table's `sstables/` directory. Each physical data file has two sidecars:
 
 ![SSTable block storage, Bloom filter, and sparse index layout](./docs/sstable-block-index-architecture.svg)
 
+A physical SSTable file contains multiple blocks; a block is not itself an SSTable:
+
+```text
+SSTable run
+├── sstable-001
+│   ├── block 1
+│   ├── block 2
+│   └── sparse index + Bloom filter
+├── sstable-002
+│   ├── block 3
+│   ├── block 4
+│   └── sparse index + Bloom filter
+```
+
 The block size is configurable with `Lsm:BlockSizeBytes` or the
 `Lsm__BlockSizeBytes` environment variable. The maximum physical file size is
 configurable with `Lsm:MaxSstableFileSizeBytes` or
