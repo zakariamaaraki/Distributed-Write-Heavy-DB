@@ -2,7 +2,7 @@
 WORKDIR /src
 COPY Router.csproj .
 RUN dotnet restore Router.csproj
-COPY Program.cs .
+COPY Program.cs ReadConsistencyPolicy.cs ./
 RUN dotnet publish Router.csproj -c Release -o /app/publish --no-restore
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
