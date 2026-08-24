@@ -156,7 +156,7 @@ accepting writes after a newer assignment is committed.
 
 ## Failure handling
 
-A follower that loses its SSE connection reconnects using its last applied table
+A follower that loses its SSE connection never treats the stream ending as terminal. Its per-table worker retries continuously, reconnects using its last applied table
 sequence. Heartbeats keep idle connections alive and allow the follower to
 notice a dead leader. The table election starts after the table-specific
 heartbeat timeout and requires the table's majority.

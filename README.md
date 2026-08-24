@@ -882,7 +882,7 @@ Followers vote at most once per term. The elected leader sends heartbeat
 messages through `/raft/append-entries`; if a node sees a newer term, it steps
 down to follower.
 
-Follower replication uses the durable change-log stream rather than exposing
+Follower replication uses a persistent per-table worker. A closed or failed SSE connection is treated as a reconnect signal; the worker retries continuously and resumes from the last applied sequence. It uses the durable change-log stream rather than exposing
 SSTables directly. Each follower stores the last leader change sequence it
 applied in `data/raft-replication.json`, then reconnects with:
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace LsmWriteDb.Raft;
 
@@ -11,13 +12,15 @@ public sealed class TableRaftReplicationService : BackgroundService
     private readonly DatabaseEngine _database;
     private readonly TableRaftCoordinator _coordinator;
     private readonly HttpClient _httpClient;
+    private readonly ILogger<TableRaftReplicationService> _logger;
     private readonly ConcurrentDictionary<string, Task> _replications = new(StringComparer.Ordinal);
 
-    public TableRaftReplicationService(DatabaseEngine database, TableRaftCoordinator coordinator, HttpClient httpClient)
+    public TableRaftReplicationService(DatabaseEngine database, TableRaftCoordinator coordinator, HttpClient httpClient, ILogger<TableRaftReplicationService> logger)
     {
         _database = database;
         _coordinator = coordinator;
         _httpClient = httpClient;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -60,17 +63,37 @@ public sealed class TableRaftReplicationService : BackgroundService
     {
         try
         {
-            await ReplicateTableAsync(table, cancellationToken);
+            // A stream ending is a reconnect signal, not a terminal condition.
+            // Keep the worker alive so every follower continuously retries after
+            // leader changes, HTTP disconnects, and transient startup races.
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await ReplicateTableOnceAsync(table, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "table replication attempt failed for {Table}; retrying", table);
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         finally
         {
-            // Allow the next maintenance pass to retry after an election race,
-            // a disconnected stream, or a transient peer failure.
             _replications.TryRemove(table, out _);
         }
     }
 
-    private async Task ReplicateTableAsync(string table, CancellationToken cancellationToken)
+    private async Task ReplicateTableOnceAsync(string table, CancellationToken cancellationToken)
     {
         try
         {
