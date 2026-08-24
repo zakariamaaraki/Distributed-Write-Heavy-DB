@@ -14,6 +14,8 @@ This document is organized from the distributed architecture down to the storage
 
 - Optimize for frequent writes.
 - Support point reads and range reads.
+- Support multiple read consistency levels: load-balanced eventual reads by default and
+  leader-routed strong reads when requested by the client.
 - Support multiple logical tables, each with its own WAL, memtable, SSTables,
   Bloom filters, and compaction lifecycle.
 - Use Bloom filters to skip SSTables that definitely do not contain a key.
@@ -122,7 +124,8 @@ Router URL rather than a database node URL.
 
 Each database node can run with a companion `Router` process. The Router is an
 HTTP reverse proxy that keeps pooled, long-lived connections to the database
-nodes and routes requests to the current leader for the requested table.
+nodes. Writes and transactional reads route to table leaders; ordinary reads are
+load-balanced across healthy replicas unless the client requests strong consistency.
 
 The Router:
 
@@ -148,17 +151,28 @@ dotnet run --project Router/Router.csproj --urls http://localhost:9080
 
 ### Read routing and consistency
 
-When a request enters through the Router, reads are routed to the current leader of
-the requested table just like writes. A non-transactional read therefore returns
-the leader's committed state. During a transaction, a read carrying the same
-`transactionId` is routed to the table leader and can see that leader's staged
-uncommitted writes. Those staged writes are not replicated to followers or the
-change log until COMMIT.
+The Router supports two consistency levels for ordinary point and range reads. The
+default is eventual consistency: when `X-Read-Consistency` is absent or set to
+`eventual`, the Router load-balances the read across healthy replicas. A follower
+may be briefly behind while it catches up from the leader's committed change
+stream.
 
-A request sent directly to a database node bypasses Router routing and reads that
-node's local replica. A follower may therefore be briefly stale while it catches
-up from the leader's change stream. Applications requiring leader-consistent
-reads should use a Router URL.
+Send `X-Read-Consistency: strong` when the read must go through the current table
+leader and return the leader's latest committed state. If the leader cannot be
+discovered, the strong read fails instead of falling back to a follower.
+
+Reads carrying a `transactionId` always go to the relevant table leader, regardless
+of the header, so the transaction can see its own staged writes. Uncommitted writes
+are not replicated to followers or published to the change log before `COMMIT`.
+
+The Router SQL console exposes an `Eventual`/`Strong` selector and sends the selected
+value as `X-Read-Consistency` with each SQL request. Writes and transaction control
+remain leader/coordinator routed. Direct database-node requests bypass Router
+load balancing and read the local replica.
+
+See [design/consistency-levels.md](./design/consistency-levels.md) for the routing
+contract and trade-offs.
+
 Clients should connect to the Router port rather than selecting a table leader
 manually. The Router forwards distributed transaction requests to a coordinator; the coordinator then contacts each affected table leader.
 ### Monitoring page
