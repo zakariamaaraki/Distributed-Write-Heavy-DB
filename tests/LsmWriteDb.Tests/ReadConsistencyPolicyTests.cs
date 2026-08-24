@@ -1,4 +1,4 @@
-﻿using Router;
+using Router;
 
 namespace LsmWriteDb.Tests;
 
@@ -23,6 +23,13 @@ public sealed class ReadConsistencyPolicyTests
         Assert.False(ReadConsistencyPolicy.ShouldRouteToLeader(false, false, strong));
     }
 
+    [Fact]
+    public void SqlSelectStatementsAreClassifiedAsReads()
+    {
+        Assert.Equal("SELECT", ReadConsistencyPolicy.ClassifySqlStatement("  SELECT * FROM users"));
+        Assert.Equal("SHOW TABLES", ReadConsistencyPolicy.ClassifySqlStatement("SHOW TABLES"));
+        Assert.Null(ReadConsistencyPolicy.ClassifySqlStatement("INSERT INTO users VALUES ('x')"));
+    }
     [Fact]
     public void UnknownHeaderValueIsRejected()
     {
