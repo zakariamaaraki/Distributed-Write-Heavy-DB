@@ -821,6 +821,17 @@ table, operation, key, value, tombstone flag, and commit timestamp. Direct
 `PUT`/`DELETE`, SQL writes, and transaction commits all publish through the same
 log because they all eventually call the storage engine write path.
 
+The durable change-log files are organized as a legacy-compatible file followed
+by bounded numbered segments:
+
+```text
+data/
++-- changelog.log                         # legacy file, read-compatible
++-- changelog-00000000000000000001.log   # immutable older segment
++-- changelog-00000000000000000002.log   # immutable older segment
++-- changelog-00000000000000000003.log   # active append segment
+```
+
 Consumers can replay recent changes with:
 
 ```text

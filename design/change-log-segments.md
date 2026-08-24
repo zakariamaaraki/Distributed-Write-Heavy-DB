@@ -16,25 +16,6 @@ data/
 
 The default segment limit is 64 MiB and is configurable with `Lsm:ChangeLogSegmentMaxBytes` or `Lsm__ChangeLogSegmentMaxBytes`.
 
-## Relationship to SSTable runs
-
-The change log is split into bounded files for the same operational reason that
-sorted flushes and compactions are split into bounded SSTable files. An SSTable
-run has block-level read structures; a change-log segment is an append-only
-JSONL stream and does not contain blocks, sparse indexes, or Bloom filters.
-
-```text
-SSTable run
-+-- sstable-001
-|   +-- block 1
-|   +-- block 2
-|   +-- sparse index + Bloom filter
-+-- sstable-002
-    +-- block 3
-    +-- block 4
-    +-- sparse index + Bloom filter
-```
-
 ## Write path
 
 1. A committed storage operation receives its global sequence number and is published to `ChangeLogService`.
