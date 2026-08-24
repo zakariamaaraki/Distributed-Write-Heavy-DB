@@ -25,8 +25,22 @@ public sealed class TableRaftReplicationService : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             foreach (var table in await _database.ListAllTablesAsync(stoppingToken))
-                _ = _replications.GetOrAdd(table.Name, name => ReplicateTableAsync(name, stoppingToken));
+                _ = _replications.GetOrAdd(table.Name, name => RunReplicationAsync(name, stoppingToken));
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+        }
+    }
+
+    private async Task RunReplicationAsync(string table, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ReplicateTableAsync(table, cancellationToken);
+        }
+        finally
+        {
+            // Allow the next maintenance pass to retry after an election race,
+            // a disconnected stream, or a transient peer failure.
+            _replications.TryRemove(table, out _);
         }
     }
 
