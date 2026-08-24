@@ -24,12 +24,38 @@ public sealed class TableRaftReplicationService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            await DiscoverPeerTablesAsync(stoppingToken);
             foreach (var table in await _database.ListAllTablesAsync(stoppingToken))
                 _ = _replications.GetOrAdd(table.Name, name => RunReplicationAsync(name, stoppingToken));
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
         }
     }
 
+    private async Task DiscoverPeerTablesAsync(CancellationToken cancellationToken)
+    {
+        foreach (var peer in _coordinator.Members())
+        {
+            try
+            {
+                var tables = await _httpClient.GetFromJsonAsync<List<PeerTableInfo>>(
+                    $"{peer.Url.TrimEnd('/')}/tables", cancellationToken);
+                if (tables is null)
+                    continue;
+
+                foreach (var table in tables)
+                {
+                    if (string.IsNullOrWhiteSpace(table.Name))
+                        continue;
+
+                    var created = await _database.CreateTableAsync(table.Name, cancellationToken);
+                    if (created)
+                        await _coordinator.EnsureTableAsync(table.Name, cancellationToken);
+                }
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+    }
     private async Task RunReplicationAsync(string table, CancellationToken cancellationToken)
     {
         try
@@ -101,4 +127,5 @@ public sealed class TableRaftReplicationService : BackgroundService
         catch (JsonException) { }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
     }
+    private sealed record PeerTableInfo(string Name);
 }

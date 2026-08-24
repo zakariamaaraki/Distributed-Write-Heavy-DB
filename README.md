@@ -118,7 +118,9 @@ node and sends the create request to the node with the fewest tables. That node
 creates the local store and propagates the catalog entry to all configured
 peers. Each peer initializes the table and its table-specific Raft state. Creation then waits
 for a discoverable elected leader before returning success, so the table exists on
-every replica and is ready for distributed writes. If the bounded readiness timeout
+every replica and is ready for distributed writes.
+Restarted followers also discover missing table names from peers and bootstrap their
+local stores before serving eventual reads. If the bounded readiness timeout
 expires, creation returns `503 Service Unavailable` and clients should retry.
 
 If a peer is unavailable during creation, verify the table lists and monitoring

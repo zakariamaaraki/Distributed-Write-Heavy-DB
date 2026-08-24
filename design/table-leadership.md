@@ -128,6 +128,11 @@ default). A timeout returns `503 Service Unavailable`; the table may already exi
 a later create request retries readiness. Peer initialization uses the same wait but
 does not recursively propagate creation.
 
+On follower restart, the replication service discovers table names from configured
+peers before starting per-table replication workers. This allows a node with an empty
+local catalog to recreate missing table stores and bootstrap them from the current
+leader snapshot and change stream.
+
 ## Replication and rebalancing
 
 Each table leader appends committed writes to the table WAL and publishes a
