@@ -146,6 +146,19 @@ $env:ROUTER_PEERS = 'node-b=http://node-b:8080,node-c=http://node-c:8080'
 dotnet run --project Router/Router.csproj --urls http://localhost:9080
 ```
 
+### Read routing and consistency
+
+When a request enters through the Router, reads are routed to the current leader of
+the requested table just like writes. A non-transactional read therefore returns
+the leader's committed state. During a transaction, a read carrying the same
+`transactionId` is routed to the table leader and can see that leader's staged
+uncommitted writes. Those staged writes are not replicated to followers or the
+change log until COMMIT.
+
+A request sent directly to a database node bypasses Router routing and reads that
+node's local replica. A follower may therefore be briefly stale while it catches
+up from the leader's change stream. Applications requiring leader-consistent
+reads should use a Router URL.
 Clients should connect to the Router port rather than selecting a table leader
 manually. The Router forwards distributed transaction requests to a coordinator; the coordinator then contacts each affected table leader.
 ### Monitoring page

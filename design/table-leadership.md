@@ -98,12 +98,24 @@ peer notification must be resolved before relying on cross-table transactions.
 2. The node reads the committed ownership record.
 3. A write is accepted only if the node is the table leader.
 4. A follower returns a redirect/rejection containing `leaderUrl` and `term`.
-5. Reads may be served locally according to the configured read policy; the
-   default remains local follower reads and therefore may be stale.
-6. SQL statements that touch multiple tables are reads only for now. A
-   transaction or write that spans tables is rejected because distributed
-   transactions are not implemented.
+5. The Router routes reads to the current table leader; direct node reads use the
+   local replica and may be stale on followers.
+6. SQL statements that touch multiple tables use the distributed transaction
+   coordinator when they write. The coordinator prepares and commits each table
+   leader, while reads are routed to the relevant table leader.
 
+## Read routing and consistency
+
+The Router resolves the requested table and forwards both reads and writes to its
+current leader. Non-transactional reads return committed leader state. A
+transactional read carrying the transaction ID is also sent to the table leader,
+where it can overlay that leader's staged, uncommitted writes. Staged writes stay
+in leader memory and are not published to followers or the change log before
+COMMIT.
+
+Direct database-node requests bypass the Router and read the local replica. A
+follower can be briefly stale while its table change stream catches up, so clients
+that require leader-consistent reads should use a Router endpoint.
 ## Replication and rebalancing
 
 Each table leader appends committed writes to the table WAL and publishes a

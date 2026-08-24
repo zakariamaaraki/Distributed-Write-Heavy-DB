@@ -11,6 +11,14 @@ The Router is an HTTP reverse proxy and does not store database data or particip
 Raft elections. The database nodes remain responsible for replication, elections,
 storage, and transaction processing.
 
+## Read consistency
+
+The Router routes reads as well as writes to the current table leader. A
+non-transactional read returns committed leader state. A transactional read carrying
+its transaction ID reaches the leader and can see that leader's staged writes.
+Direct database-node requests bypass the Router and may read a follower that is
+briefly behind while it catches up from the leader's change stream.
+
 ## Deployment
 
 Each database node has one colocated Router:
@@ -75,8 +83,9 @@ write rule.
 - The Router does not provide an additional consistency or transaction protocol.
 - It does not buffer or replay an entire transaction; transaction requests remain
   governed by the database transaction manager.
-- A request that spans multiple tables is currently routed using the table detected
-  from the SQL statement. Cross-table distributed transactions are not implemented.
+- A request that spans multiple tables is routed using the table detected from the
+  SQL statement; the database transaction coordinator then contacts each table leader
+  for distributed prepare and commit.
 - The leader cache is intentionally local and temporary; each Router independently
   refreshes ownership after a miss or routing failure.
 
