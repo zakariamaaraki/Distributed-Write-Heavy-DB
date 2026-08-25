@@ -420,7 +420,7 @@ The query returns standard relational columns:
 
 A terminal-style ANSI SQL example is shown below:
 
-![ANSI SQL relational table query response](./docs/relational-table-query-response.svg)
+![ANSI SQL relational table query response](./docs/relational-table-ansi-crud.svg)
 
 Submit SQL with:
 
