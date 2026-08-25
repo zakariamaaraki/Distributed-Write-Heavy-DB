@@ -50,6 +50,15 @@ public sealed class TableRaftReplicationService : BackgroundService
                     if (string.IsNullOrWhiteSpace(table.Name))
                         continue;
 
+                    if (string.Equals(table.Kind, "view", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var view = await _httpClient.GetFromJsonAsync<ViewDefinition>(
+                            $"{peer.Url.TrimEnd('/')}/views/{Uri.EscapeDataString(table.Name)}", cancellationToken);
+                        if (view is not null)
+                            await _database.CreateViewAsync(view.Name, view.Query, cancellationToken);
+                        continue;
+                    }
+
                     var created = await _database.CreateTableAsync(table.Name, cancellationToken);
                     if (created)
                         await _coordinator.EnsureTableAsync(table.Name, cancellationToken);
@@ -150,5 +159,5 @@ public sealed class TableRaftReplicationService : BackgroundService
         catch (JsonException) { }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
     }
-    private sealed record PeerTableInfo(string Name);
+    private sealed record PeerTableInfo(string Name, string Kind = "table");
 }

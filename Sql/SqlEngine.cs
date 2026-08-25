@@ -417,6 +417,8 @@ public sealed class SqlEngine
             throw new SqlExecutionException("CREATE VIEW requires the multi-table database engine.");
 
         var created = await _database.CreateViewAsync(statement.Name, statement.Query);
+        if (_tableCoordinator is not null)
+            await _tableCoordinator.EnsureViewOnPeersAsync(statement.Name, statement.Query);
         return SqlExecutionResult.Acknowledged(
             "CREATE VIEW",
             rowsAffected: created ? 1 : 0,

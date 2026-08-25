@@ -69,7 +69,24 @@ public static class TableEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
         });
-        MapKeyValueRoutes(app, "/kv", TableNames.Default);
+        app.MapGet("/views/{view}", async (string view, DatabaseEngine db, CancellationToken cancellationToken) =>
+        {
+            var definition = await db.GetViewAsync(view, cancellationToken);
+            return definition is null ? Results.NotFound() : Results.Ok(definition);
+        });
+        app.MapPut("/views/{view}", async (string view, CreateViewRequest request, DatabaseEngine db, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var normalized = TableNames.Normalize(view);
+                var created = await db.CreateViewAsync(normalized, request.Query, cancellationToken);
+                return Results.Ok(new { view = normalized, kind = "view", created });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });        MapKeyValueRoutes(app, "/kv", TableNames.Default);
         MapKeyValueRoutes(app, "/tables/{table}/kv", tableName: null);
 
         app.MapGet("/tables/{table}/snapshot", async (string table, DatabaseEngine db) =>
@@ -219,3 +236,4 @@ public static class TableEndpoints
 }
 
 public sealed record PutValueRequest(string? Value);
+public sealed record CreateViewRequest(string Query);

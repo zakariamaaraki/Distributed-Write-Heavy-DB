@@ -54,12 +54,9 @@ property remain compatible.
   its own.
 - View reads use the same SQL execution path as the stored definition,
   including relational schema validation and existing JSON-property filters.
-- Recursive view evaluation is not a supported definition pattern and should
-  be rejected before production use.
+- Recursive view evaluation is not supported; expansion is bounded and fails safely.
 
 ## Future work
 
 The initial implementation deliberately keeps the surface small. Future
-iterations can add `DROP VIEW`, `CREATE OR REPLACE VIEW`, dependency tracking,
-cycle detection, outer predicates/projections over a view, and cluster-wide
-catalog replication for view definitions.
+iterations can add `DROP VIEW`, `CREATE OR REPLACE VIEW`, dependency tracking, cycle detection, and outer predicates/projections over a view. Peer metadata discovery and recovery are described in [the metadata discovery design](./metadata-discovery.md).

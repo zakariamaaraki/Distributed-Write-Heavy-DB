@@ -413,6 +413,9 @@ SSTables, indexes, or table leader. The definition is stored in
 `data/catalog.json` under `views`. See [the views design](./design/views.md) for
 catalog format, execution semantics, and current limitations.
 
+Peer metadata discovery repairs missed table and view definitions after transient failures or node restarts. See [the metadata discovery design](./design/metadata-discovery.md).
+
+![Cluster metadata discovery and recovery loop](./docs/metadata-discovery-loop.svg)
 Example relational-table workflow:
 
 ```sql
