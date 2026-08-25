@@ -1,3 +1,3 @@
-from .lsmwrite_client import ClientConfig, LsmWriteDbClient, LsmWriteDbError, LsmWriteDbHttpError, Transaction
+from .lsmwrite_client import ClientConfig, LsmWriteDbClient, LsmWriteDbError, LsmWriteDbHttpError, PreparedStatement, Transaction
 
-__all__ = ["ClientConfig", "LsmWriteDbClient", "LsmWriteDbError", "LsmWriteDbHttpError", "Transaction"]
+__all__ = ["ClientConfig", "LsmWriteDbClient", "LsmWriteDbError", "LsmWriteDbHttpError", "PreparedStatement", "Transaction"]

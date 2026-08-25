@@ -13,3 +13,38 @@ def test_quote_and_config():
 
 def test_logging_namespace():
     assert logging.getLogger("lsmwrite").name == "lsmwrite"
+
+
+def test_prepare_binds_ansi_sql_literals_without_injection():
+    client = LsmWriteDbClient("http://example.test", retries=0)
+    requests = []
+    client._request = lambda method, path, body=None, **kwargs: requests.append((method, path, body)) or {"ok": True}
+
+    statement = client.prepare("INSERT INTO users (id, name, active) VALUES (?, ?, ?)")
+    result = statement.execute(7, "O'Reilly", False)
+
+    assert result == {"ok": True}
+    assert requests[0][2]["query"] == "INSERT INTO users (id, name, active) VALUES (7, 'O''Reilly', FALSE)"
+
+
+def test_execute_sql_accepts_parameters_and_transaction():
+    client = LsmWriteDbClient("http://example.test", retries=0)
+    requests = []
+    client._request = lambda method, path, body=None, **kwargs: requests.append((method, path, body)) or body
+
+    client.execute_sql("SELECT * FROM users WHERE id = ? AND name = ?", "tx-1", [42, "Ada"])
+
+    assert requests[0][2] == {
+        "query": "SELECT * FROM users WHERE id = 42 AND name = 'Ada'",
+        "transactionId": "tx-1",
+    }
+
+
+def test_prepare_rejects_parameter_count_mismatch():
+    client = LsmWriteDbClient("http://example.test", retries=0)
+    statement = client.prepare("SELECT * FROM users WHERE id = ?")
+    try:
+        statement.execute()
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "Not enough" in str(exc)

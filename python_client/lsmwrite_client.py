@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 _LOG = logging.getLogger("lsmwrite")
 
@@ -110,8 +110,12 @@ class LsmWriteDbClient:
     def stats(self, table: str | None = None):
         path = "/stats" if table is None else f"/tables/{self._quote(table)}/stats"
         return self._request("GET", path)
-    def execute_sql(self, query: str, transaction_id: str | None = None):
+    def execute_sql(self, query: str, transaction_id: str | None = None, parameters: Sequence[Any] | None = None):
+        if parameters is not None:
+            query = _bind_parameters(query, parameters)
         return self._request("POST", "/sql", {"query": query, "transactionId": transaction_id})
+    def prepare(self, query: str) -> "PreparedStatement":
+        return PreparedStatement(self, query)
     def begin(self):
         result = self._request("POST", "/transactions")
         return Transaction(self, result["transactionId"])
@@ -146,6 +150,48 @@ class LsmWriteDbClient:
             finally:
                 if response is not None: response.close()
             if not reconnect: return
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    raise TypeError("ANSI SQL parameters must be None, bool, int, float, or str")
+
+
+def _bind_parameters(query: str, parameters: Sequence[Any]) -> str:
+    values = iter(parameters)
+    output: list[str] = []
+    quoted = False
+    for character in query:
+        if character == "'":
+            quoted = not quoted
+        if character == "?" and not quoted:
+            try:
+                output.append(_sql_literal(next(values)))
+            except StopIteration as exc:
+                raise ValueError("Not enough SQL parameters for placeholders") from exc
+        else:
+            output.append(character)
+    try:
+        next(values)
+    except StopIteration:
+        return "".join(output)
+    raise ValueError("Too many SQL parameters for placeholders")
+
+
+class PreparedStatement:
+    """Reusable client-side prepared ANSI SQL statement."""
+
+    def __init__(self, client: LsmWriteDbClient, query: str):
+        self.client, self.query = client, query
+
+    def execute(self, *parameters: Any, transaction_id: str | None = None):
+        return self.client.execute_sql(self.query, transaction_id, parameters)
 
 class DistributedTransaction:
     def __init__(self, client: LsmWriteDbClient, transaction_id: str):

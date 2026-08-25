@@ -729,7 +729,7 @@ LIMIT 100
 
 ## Python Client
 
-The repository includes a dependency-free Python client in `python_client/` for the HTTP and Server-Sent Events APIs. It supports tables, key/value reads and writes, transactions, SQL execution, statistics, change-log replay, and reconnectable change streaming.
+The repository includes a dependency-free Python client in `python_client/` for the HTTP and Server-Sent Events APIs. It supports tables, key/value reads and writes, transactions, SQL execution, prepared ANSI SQL statements for relational tables, statistics, change-log replay, and reconnectable change streaming.
 
 Install it locally:
 
@@ -757,6 +757,43 @@ for event in client.stream_changes():
     print(event)
 ```
 
+
+Prepared ANSI SQL
+
+For relational tables, `prepare()` provides reusable client-side parameterized ANSI SQL. Parameters are escaped and converted to SQL literals before the request is sent; existing `execute_sql(query)` calls remain supported.
+
+```python
+from lsmwrite_client import LsmWriteDbClient
+
+client = LsmWriteDbClient("http://localhost:8080")
+client.execute_sql("""
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    active BOOLEAN
+)
+""")
+
+insert_user = client.prepare(
+    "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
+)
+insert_user.execute(42, "Ada", True)
+
+select_user = client.prepare("SELECT id, name, active FROM users WHERE id = ?")
+print(select_user.execute(42))
+
+client.prepare("UPDATE users SET name = ? WHERE id = ?").execute("Grace", 42)
+client.prepare("DELETE FROM users WHERE id = ?").execute(42)
+```
+
+`execute_sql()` also accepts `parameters=[...]` and an optional transaction id:
+
+```python
+client.execute_sql(
+    "SELECT * FROM users WHERE id = ?",
+    parameters=[42],
+)
+```
 A Docker-backed integration test is available at `python_client/run_integration_test.py`; it starts the local Compose cluster, discovers a leader, runs CRUD, transaction, SQL, change-log, and stats commands through the client, and tears the cluster down afterward.
 
 The client uses the standard `logging` module under the `lsmwrite` logger. Request
