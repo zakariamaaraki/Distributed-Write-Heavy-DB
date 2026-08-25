@@ -14,7 +14,7 @@
         <div class="mark">SQL</div>
         <div>
           <h1>LsmWriteDb Console</h1>
-          <span>kv query workspace</span>
+          <span>ANSI SQL + key/value workspace</span>
         </div>
       </div>
 
@@ -38,6 +38,11 @@
         <span class="label">Suggested queries</span>
         <div class="query-list">
           <button class="snippet" data-query="SHOW TABLES">SHOW TABLES</button>
+          <button class="snippet ansi" data-query="CREATE TABLE relational_users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, active BOOLEAN)">ANSI: CREATE TABLE relational_users (...)</button>
+          <button class="snippet ansi" data-query="INSERT INTO relational_users (id, name, active) VALUES (42, 'Ada', TRUE)">ANSI: INSERT INTO relational_users (...) VALUES (...)</button>
+          <button class="snippet ansi" data-query="SELECT id, name, active FROM relational_users WHERE id = 42">ANSI: SELECT relational_users WHERE id = 42</button>
+          <button class="snippet ansi" data-query="UPDATE relational_users SET name = 'Grace' WHERE id = 42">ANSI: UPDATE relational_users SET ...</button>
+          <button class="snippet ansi" data-query="DELETE FROM relational_users WHERE id = 42">ANSI: DELETE relational_users WHERE id = 42</button>
           <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
           <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;,&quot;tier&quot;:&quot;gold&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')</button>
           <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1002', '{&quot;name&quot;:&quot;Grace&quot;,&quot;tier&quot;:&quot;silver&quot;}')">INSERT INTO users (key, value) VALUES ('user:1002', '{"name":"Grace","tier":"silver"}')</button>
@@ -91,7 +96,7 @@
             <button id="clearEditor">Clear</button>
           </div>
         </div>
-        <textarea id="queryEditor" class="editor" spellcheck="false">CREATE TABLE users</textarea>
+        <textarea id="queryEditor" class="editor" spellcheck="false">CREATE TABLE relational_users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, active BOOLEAN)</textarea>
       </section>
 
       <section class="results">
