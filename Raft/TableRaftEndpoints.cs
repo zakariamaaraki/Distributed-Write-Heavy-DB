@@ -44,6 +44,21 @@ public static class TableRaftEndpoints
             }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });
+        app.MapDelete("/raft/tables/{table}", async (
+            string table,
+            DatabaseEngine database,
+            TableRaftCoordinator coordinator,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var normalized = TableNames.Normalize(table);
+                await database.DropTableAsync(normalized, cancellationToken);
+                coordinator.RemoveTable(normalized);
+                return Results.NoContent();
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        });
         app.MapPost("/raft/tables/{table}/request-vote", async (
             string table,
             RaftRequestVoteRequest request,

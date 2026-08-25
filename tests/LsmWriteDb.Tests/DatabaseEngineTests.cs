@@ -62,6 +62,48 @@ public sealed class DatabaseEngineTests
     }
 
     [Fact]
+    public async Task ListTablesAsync_ReportsParadigmKinds()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var database = await CreateDatabaseAsync(dataPath);
+            await database.CreateTableAsync("documents");
+            await database.CreateRelationalTableAsync(new RelationalTableSchema("relational", [
+                new RelationalColumnDefinition("id", RelationalColumnType.Int, IsPrimaryKey: true),
+                new RelationalColumnDefinition("name", RelationalColumnType.Text)]));
+
+            var kinds = (await database.ListTablesAsync()).ToDictionary(table => table.Name, table => table.Kind);
+            Assert.Equal("kv", kinds["kv"]);
+            Assert.Equal("document", kinds["documents"]);
+            Assert.Equal("relational", kinds["relational"]);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+    [Fact]
+    public async Task DropTable_RemovesCatalogStoreAndRows()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var database = await CreateDatabaseAsync(dataPath);
+            await database.CreateTableAsync("temporary");
+            await database.PutAsync("temporary", "key", "value");
+
+            Assert.True(await database.DropTableAsync("temporary"));
+            Assert.DoesNotContain("temporary", (await database.ListTablesAsync()).Select(table => table.Name));
+            Assert.False(Directory.Exists(Path.Combine(dataPath, "tables", "temporary")));
+            Assert.False(await database.DropTableAsync("temporary"));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
+    [Fact]
     public async Task ChangeLog_RecordsTableNamesAndGlobalSequences()
     {
         var dataPath = CreateTempDataPath();

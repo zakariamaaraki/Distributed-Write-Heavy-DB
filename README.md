@@ -203,9 +203,13 @@ Open the Router monitoring page at `/monitoring` (for example, `http://localhost
 - configured nodes and reachability;
 - each discovered table;
 - the role, term, and leader reported by every node for each table;
-- ownership changes during elections and rebalancing.
+- ownership changes during elections and rebalancing;
+- per-table disk size in KB on each node and total node storage;
+- active and queued request counts.
 
 The page uses `GET /monitoring/api/status` for its live JSON data. It is a Router-local operational view and does not change database state.
+
+Request-admission metrics are scoped to POST /sql only. The SQL middleware inspects the statement: SELECT and SHOW use the read pool, while other SQL statements use the write pool. Each node has independent read and write pools, defaulting to 5,000 concurrent requests each. Monitoring and other HTTP endpoints bypass these pools, so operational polling does not consume SQL capacity.
 ### SQL console through the Router
 
 The Router exposes the same ergonomic SQL console as the database node. Open it through the Router instead of a database port:
@@ -408,7 +412,7 @@ SELECT * FROM gold_users;
 ```
 
 A view is exposed as a catalog object with `kind: "view"`; physical tables use
-`kind: "table"`. Views cannot be written to and have no independent WAL,
+`kind: "kv"`, `kind: "document"`, or `kind: "relational"`. Views cannot be written to and have no independent WAL,
 SSTables, indexes, or table leader. The definition is stored in
 `data/catalog.json` under `views`. See [the views design](./design/views.md) for
 catalog format, execution semantics, and current limitations.
@@ -706,14 +710,16 @@ LIMIT 100
 
 - `GET /tables`: list tables.
 - `PUT /tables/{table}`: create a table.
+- `DELETE /tables/{table}`: drop a physical table and its catalog/storage metadata.
 - `PUT /tables/{table}/kv/{key}`: create or update a value in a table.
 - `GET /tables/{table}/kv/{key}`: fetch a single value from a table.
 - `DELETE /tables/{table}/kv/{key}`: delete a key from a table.
 - `GET /tables/{table}/kv/range?start=a&end=z&limit=100`: return table keys
   in sorted order.
-- `GET /tables/{table}/stats`: inspect one table.
+- `GET /tables/{table}/stats`: inspect one table, including its on-disk `diskSizeBytes`.
 - `GET /tables/{table}/snapshot`: bootstrap a follower from a table snapshot and applied sequence.
 - `POST /raft/rebalance`: probe configured peers and persist a new healthy ownership assignment.
+- `GET /metrics`: inspect aggregate and read/write-specific active and queued HTTP requests, the separate read/write limits, and total node `totalDiskSizeBytes`. Reads and writes default to independent 5,000-request pools and can be changed with `Lsm:MaxConcurrentReads` and `Lsm:MaxConcurrentWrites`.
 - `POST /raft/membership/register`: register a peer and trigger ownership rebalancing.
 - `PUT /kv/{key}`: create or update a value in the default `kv` table.
 - `GET /kv/{key}`: fetch a single value from the default `kv` table.
@@ -741,6 +747,7 @@ LIMIT 100
 - `GET /indexes/btrees`: dump all current JSON value index B+ trees.
 - `GET /indexes/{name}/btree`: dump one JSON value index B+ tree.
 - `POST /sql`: execute a SQL statement against the table/key/value/index model.
+  Supports `DROP TABLE name` and `DROP TABLE IF EXISTS name`.
 - `GET /sql-console`: open the embedded browser SQL console.
 - `GET /changes?fromSequence=0&limit=100`: replay committed change-log events.
 - `GET /changes/stream?fromSequence=0`: stream committed changes as

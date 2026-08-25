@@ -13,6 +13,7 @@ public sealed class TableRaftCoordinator
     private readonly DatabaseEngine _database;
     private readonly ConcurrentDictionary<string, RaftNode> _nodes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _loops = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _loopCancellation = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RaftPeerOptions> _members = new(StringComparer.Ordinal);
     private readonly ILoggerFactory? _loggerFactory;
 
@@ -47,7 +48,8 @@ public sealed class TableRaftCoordinator
 
         var node = _nodes.GetOrAdd(normalized, CreateNode);
         await node.InitializeAsync(cancellationToken);
-        _ = _loops.GetOrAdd(normalized, _ => node.RunElectionLoopAsync(CancellationToken.None));
+        var loopCancellation = _loopCancellation.GetOrAdd(normalized, _ => new CancellationTokenSource());
+        _ = _loops.GetOrAdd(normalized, _ => node.RunElectionLoopAsync(loopCancellation.Token));
         if (!TableNames.IsInternal(normalized))
             await PersistOwnershipAsync(normalized, node.GetStatus(), cancellationToken);
     }
@@ -97,6 +99,34 @@ var currentPeers = _members.Values.Where(peer => peer.NodeId != _options.NodeId)
                 await _database.PutAsync(TableNames.Ownership, record.Table, JsonSerializer.Serialize(record));
         }
         return planned;
+    }
+    public void RemoveTable(string table)
+    {
+        var normalized = TableNames.Normalize(table);
+        if (_loopCancellation.TryRemove(normalized, out var cancellation))
+        {
+            cancellation.Cancel();
+            cancellation.Dispose();
+        }
+        _loops.TryRemove(normalized, out _);
+        _nodes.TryRemove(normalized, out _);
+    }
+
+    public async Task DropTableOnPeersAsync(string table, CancellationToken cancellationToken = default)
+    {
+        var normalized = TableNames.Normalize(table);
+        foreach (var peer in _members.Values)
+        {
+            try
+            {
+                using var response = await _httpClient.DeleteAsync(
+                    $"{peer.Url.TrimEnd('/')}/raft/tables/{Uri.EscapeDataString(normalized)}",
+                    cancellationToken);
+                response.EnsureSuccessStatusCode();
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
     }
     public async Task EnsureTableOnPeersAsync(string table, CancellationToken cancellationToken = default)
     {

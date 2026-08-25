@@ -62,6 +62,11 @@ internal sealed class SqlParser
             return ParseCreate();
         }
 
+        if (MatchKeyword("DROP"))
+        {
+            return ParseDrop();
+        }
+
         if (MatchKeyword("INSERT"))
         {
             return ParseInsert();
@@ -85,6 +90,17 @@ internal sealed class SqlParser
         throw Error("Expected BEGIN, COMMIT, ROLLBACK, SHOW TABLES, CREATE, INSERT, SELECT, UPDATE, DELETE, or CREATE VIEW.");
     }
 
+    private SqlStatement ParseDrop()
+    {
+        ExpectKeyword("TABLE");
+        var ifExists = false;
+        if (MatchKeyword("IF"))
+        {
+            ExpectKeyword("EXISTS");
+            ifExists = true;
+        }
+        return new SqlDropTableStatement(ExpectTableName(), ifExists);
+    }
     private SqlStatement ParseCreate()
     {
         if (MatchKeyword("RELATIONAL"))

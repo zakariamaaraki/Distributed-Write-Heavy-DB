@@ -41,7 +41,7 @@ Views are persisted in `data/catalog.json` and have no directory under
 ```
 
 The table listing and `SHOW TABLES` expose `kind: "view"` for views and
-`kind: "table"` for physical tables. Existing catalogs without a `views`
+`kind: "kv"`, `kind: "document"`, or `kind: "relational"` for physical tables. Existing catalogs without a `views`
 property remain compatible.
 
 ## Execution and consistency

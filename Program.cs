@@ -14,8 +14,12 @@ var flushThreshold = builder.Configuration.GetValue("Lsm:FlushThreshold", 100);
 var blockSizeBytes = builder.Configuration.GetValue("Lsm:BlockSizeBytes", LsmStoreOptions.DefaultBlockSizeBytes);
 var maxSstableFileSizeBytes = builder.Configuration.GetValue("Lsm:MaxSstableFileSizeBytes", LsmStoreOptions.DefaultMaxSstableFileSizeBytes);
 var changeLogSegmentMaxBytes = builder.Configuration.GetValue("Lsm:ChangeLogSegmentMaxBytes", LsmStoreOptions.DefaultChangeLogSegmentMaxBytes);
+var maxConcurrentRequests = builder.Configuration.GetValue("Lsm:MaxConcurrentRequests", 5000);
+var maxConcurrentReads = builder.Configuration.GetValue("Lsm:MaxConcurrentReads", maxConcurrentRequests);
+var maxConcurrentWrites = builder.Configuration.GetValue("Lsm:MaxConcurrentWrites", maxConcurrentRequests);
 var raftOptions = builder.Configuration.GetSection("Raft").Get<RaftOptions>() ?? new RaftOptions();
 
+builder.Services.AddSingleton(new RequestMetrics(maxConcurrentReads, maxConcurrentWrites));
 builder.Services.AddSingleton(new LsmStoreOptions(
     dataPath,
     flushThreshold,
@@ -46,11 +50,30 @@ var app = builder.Build();
 var database = app.Services.GetRequiredService<DatabaseEngine>();
 await database.InitializeAsync();
 
+app.UseMiddleware<RequestMetricsMiddleware>();
+
 app.UseStaticFiles();
 
 app.MapGet("/", () => Results.Ok(new { name = "Simple LSM Write Database" }));
 
 app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
+app.MapGet("/metrics", (RequestMetrics metrics, DatabaseEngine database) =>
+{
+    var snapshot = metrics.Snapshot();
+    return Results.Ok(new
+    {
+        snapshot.ActiveRequests,
+        snapshot.QueuedRequests,
+        snapshot.MaxConcurrentRequests,
+        snapshot.ActiveReads,
+        snapshot.QueuedReads,
+        snapshot.MaxConcurrentReads,
+        snapshot.ActiveWrites,
+        snapshot.QueuedWrites,
+        snapshot.MaxConcurrentWrites,
+        TotalDiskSizeBytes = database.GetTotalDiskSizeBytes()
+    });
+});
 
 app.MapTableEndpoints();
 app.MapTransactionEndpoints();

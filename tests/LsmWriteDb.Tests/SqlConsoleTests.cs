@@ -22,6 +22,7 @@ public sealed class SqlConsoleTests
         Assert.Contains("ANSI: CREATE TABLE relational_users (...)", html);
         Assert.Contains("CREATE TABLE relational_users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, active BOOLEAN)", html);
         Assert.Contains("SELECT id, name, active FROM relational_users WHERE id = 42", html);
+        Assert.Contains("ANSI: DROP TABLE IF EXISTS relational_users", html);
         Assert.Contains("ANSI: CREATE VIEW gold_users AS ...", html);
         Assert.Contains("SELECT * FROM gold_users", html);
         Assert.Contains("CREATE INDEX idx_users_tier ON users (value.tier)", html);

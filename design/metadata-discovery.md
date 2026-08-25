@@ -22,7 +22,7 @@ peer /tables → compare metadata → repair local catalog
 For every configured peer, a node requests `/tables`. The response includes the
 object `name` and `kind`:
 
-- `kind: "table"`: the node creates the physical table if missing, initializes
+- `kind: "kv"`, `kind: "document"`, or `kind: "relational"`: the node creates the physical table if missing, initializes
   its per-table Raft node, and starts normal snapshot/change-log replication.
 - `kind: "view"`: the node fetches `/views/{view}`, stores the view definition
   in its catalog, and does not create physical storage or a Raft group.

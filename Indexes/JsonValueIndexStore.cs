@@ -148,6 +148,31 @@ internal sealed class JsonValueIndexStore
         }
     }
 
+    public async Task RemoveTableAsync(string table, CancellationToken cancellationToken = default)
+    {
+        var normalizedTable = TableNames.Normalize(table);
+        await _mutex.WaitAsync(cancellationToken);
+        try
+        {
+            EnsureInitialized();
+            if (!_indexesByTable.Remove(normalizedTable, out var indexes))
+                return;
+
+            foreach (var index in indexes)
+            {
+                _indexesByName.Remove(index.Definition.Name);
+                var path = IndexPath(index.Definition.Name);
+                if (Directory.Exists(path))
+                    Directory.Delete(path, recursive: true);
+            }
+
+            await WriteCatalogAsync(Definitions(), cancellationToken);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
     public async Task<IReadOnlyList<string>?> TrySearchAsync(
         string table,
         IReadOnlyList<string> path,

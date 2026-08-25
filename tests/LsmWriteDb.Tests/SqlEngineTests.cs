@@ -511,6 +511,31 @@ public sealed class SqlEngineTests
             DeleteTempDataPath(dataPath);
         }
     }
+    [Fact]
+    public async Task ExecuteAsync_DropsTableAndSupportsIfExists()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE disposable", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO disposable VALUES ('k', '{\"text\":\"v\"}')", null));
+
+            var dropped = await engine.ExecuteAsync(new SqlQueryRequest("DROP TABLE disposable", null));
+            var absent = await engine.ExecuteAsync(new SqlQueryRequest("DROP TABLE IF EXISTS disposable", null));
+            var tables = await engine.ExecuteAsync(new SqlQueryRequest("SHOW TABLES", null));
+
+            Assert.Equal("DROP TABLE", dropped.StatementType);
+            Assert.Equal(1, dropped.RowsAffected);
+            Assert.Equal(0, absent.RowsAffected);
+            Assert.DoesNotContain(tables.Rows, row => row["table"] == "disposable");
+            Assert.False(Directory.Exists(Path.Combine(dataPath, "tables", "disposable")));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);

@@ -6,6 +6,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from lsmwrite_client import LsmWriteDbClient
 
+def test_drop_table_uses_table_delete_endpoint():
+    client = LsmWriteDbClient("http://example.test", retries=0)
+    requests = []
+    client._request = lambda method, path, body=None, **kwargs: requests.append((method, path, body)) or {"ok": True}
+
+    assert client.drop_table("bench/table") == {"ok": True}
+    assert requests == [("DELETE", "/tables/bench%2Ftable", None)]
 def test_quote_and_config():
     client = LsmWriteDbClient("http://example.test/", timeout=2, retries=1)
     assert client.config.base_url == "http://example.test"

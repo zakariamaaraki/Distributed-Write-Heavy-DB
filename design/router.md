@@ -106,7 +106,9 @@ the workload.
 
 ## Monitoring
 
-The Router serves `/monitoring`, a browser page that polls `/monitoring/api/status` every three seconds. It aggregates configured node reachability, table discovery, and each node's table Raft role, term, leader id, and leader URL. This gives operators a live view of per-table ownership during elections and rebalancing without routing or mutating data.
+The Router serves `/monitoring`, a browser page that polls `/monitoring/api/status` every three seconds. It aggregates node reachability, aggregate and read/write-specific active and queued request counts, separate read/write capacity, total node storage, per-table disk sizes, table discovery including `kind` (`kv`, `document`, `relational`, or `view`), and physical-table Raft ownership. Views are displayed as non-Raft objects. It aggregates configured node reachability, table discovery, and each node's table Raft role, term, leader id, and leader URL. This gives operators a live view of per-table ownership during elections and rebalancing without routing or mutating data.
+
+Request-admission counters apply only to POST /sql. Statements beginning with SELECT or SHOW enter the read pool; all other SQL statements enter the write pool. The two pools are independent, and monitoring requests are marked and excluded so dashboard polling does not consume SQL capacity.
 ## SQL console routing
 
 The Router exposes the database's existing SQL console at `/sql-console`. The page and its static assets are served through the Router. Browser `POST /sql` calls use the selected consistency level, and read responses expose `X-Read-From`. Users keep one Router URL and do not need to select a database node manually.

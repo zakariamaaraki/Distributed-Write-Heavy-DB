@@ -138,6 +138,21 @@ public sealed class LsmStore
         }
     }
 
+    public async Task DeleteDataAsync()
+    {
+        await _mutex.WaitAsync();
+        try
+        {
+            EnsureInitialized();
+            if (Directory.Exists(_options.DataPath))
+                Directory.Delete(_options.DataPath, recursive: true);
+            _initialized = false;
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
     public async Task PutAsync(string key, string value)
     {
         ValidateKey(key);

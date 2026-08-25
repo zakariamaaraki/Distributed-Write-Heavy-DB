@@ -65,7 +65,8 @@ public sealed class SqlEngine
             and not SqlRollbackStatement
             and not SqlShowTablesStatement
             and not SqlCreateTableStatement
-            and not SqlCreateViewStatement)
+            and not SqlCreateViewStatement
+            and not SqlDropTableStatement)
         {
             if (_tableRoleGuard is not null)
                 _tableRoleGuard.EnsureLeader(GetStatementTable(statement));
@@ -80,6 +81,7 @@ public sealed class SqlEngine
             SqlRollbackStatement => Rollback(request.TransactionId),
             SqlShowTablesStatement => await ShowTablesAsync(),
             SqlCreateTableStatement create => await CreateTableAsync(create),
+            SqlDropTableStatement drop => await DropTableAsync(drop),
             SqlCreateViewStatement createView => await CreateViewAsync(createView),
             SqlCreateIndexStatement createIndex => await CreateIndexAsync(createIndex),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
@@ -95,6 +97,7 @@ public sealed class SqlEngine
         return statement switch
         {
             SqlCreateTableStatement create => create.Table,
+            SqlDropTableStatement drop => drop.Table,
             SqlCreateViewStatement createView => createView.Name,
             SqlCreateIndexStatement create => create.Table,
             SqlInsertStatement insert => insert.Table,
@@ -411,6 +414,41 @@ public sealed class SqlEngine
             message: created ? "index created" : "index already exists");
     }
 
+    private async Task<SqlExecutionResult> DropTableAsync(SqlDropTableStatement statement)
+    {
+        if (_database is null)
+        {
+            if (!statement.IfExists)
+                throw new SqlExecutionException("DROP TABLE requires the multi-table database engine.");
+            return SqlExecutionResult.Acknowledged("DROP TABLE", 0, message: "table does not exist");
+        }
+
+        bool dropped;
+        try
+        {
+            dropped = await _database.DropTableAsync(statement.Table);
+        }
+        catch (TableNotFoundException) when (statement.IfExists)
+        {
+            dropped = false;
+        }
+        catch (ArgumentException ex)
+        {
+            throw new SqlExecutionException(ex.Message);
+        }
+
+        if (dropped && _tableCoordinator is not null)
+        {
+            _tableCoordinator.RemoveTable(statement.Table);
+            await _tableCoordinator.DropTableOnPeersAsync(statement.Table);
+        }
+
+        if (!dropped && !statement.IfExists)
+            throw new SqlExecutionException($"table '{TableNames.Normalize(statement.Table)}' not found", StatusCodes.Status404NotFound);
+
+        return SqlExecutionResult.Acknowledged("DROP TABLE", dropped ? 1 : 0,
+            message: dropped ? "table dropped" : "table does not exist");
+    }
     private async Task<SqlExecutionResult> CreateViewAsync(SqlCreateViewStatement statement)
     {
         if (_database is null)

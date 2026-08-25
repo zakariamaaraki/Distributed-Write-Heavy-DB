@@ -27,6 +27,21 @@ public static class TableEndpoints
             return Results.Ok(result);
         });
 
+        app.MapDelete("/tables/{table}", async (string table, DatabaseEngine db, TableRaftCoordinator coordinator, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var normalized = TableNames.Normalize(table);
+                var dropped = await db.DropTableAsync(normalized, cancellationToken);
+                if (dropped)
+                {
+                    coordinator.RemoveTable(normalized);
+                    await coordinator.DropTableOnPeersAsync(normalized, cancellationToken);
+                }
+                return dropped ? Results.NoContent() : Results.NotFound();
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        });
         app.MapPut("/tables/{table}", async (string table, DatabaseEngine db, TableRaftCoordinator coordinator, CancellationToken cancellationToken) =>
         {
             try

@@ -52,7 +52,8 @@ public sealed record TableStats(
     int SstableCount,
     long LastSequence,
     int FlushThreshold,
-    int BlockSizeBytes);
+    int BlockSizeBytes,
+    long DiskSizeBytes);
 
 public sealed record DatabaseStats(
     IReadOnlyList<TableStats> Tables,
@@ -167,7 +168,11 @@ public sealed class DatabaseEngine
 
         return _stores.Keys
             .Where(name => !TableNames.IsInternal(name))
-            .Select(name => new TableInfo(name, "table"))
+            .Select(name => new TableInfo(
+                name,
+                string.Equals(name, TableNames.Default, StringComparison.Ordinal)
+                    ? "kv"
+                    : _relationalSchemas.ContainsKey(name) ? "relational" : "document"))
             .Concat(_views.Values.Where(view => !TableNames.IsInternal(view.Name)).Select(view => new TableInfo(view.Name, "view")))
             .OrderBy(table => table.Name, StringComparer.Ordinal)
             .ToList();
@@ -177,7 +182,11 @@ public sealed class DatabaseEngine
     {
         await EnsureInitializedAsync(cancellationToken);
         return _stores.Keys.OrderBy(name => name, StringComparer.Ordinal)
-            .Select(name => new TableInfo(name, "table")).ToList();
+            .Select(name => new TableInfo(
+                name,
+                string.Equals(name, TableNames.Default, StringComparison.Ordinal)
+                    ? "kv"
+                    : _relationalSchemas.ContainsKey(name) ? "relational" : "document")).ToList();
     }
     public async Task<bool> CreateTableAsync(string table, CancellationToken cancellationToken = default)
     {
@@ -191,6 +200,40 @@ public sealed class DatabaseEngine
         return await CreateTableCoreAsync(normalized, schema with { Table = normalized }, cancellationToken);
     }
 
+    public async Task<bool> DropTableAsync(string table, CancellationToken cancellationToken = default)
+    {
+        var normalized = TableNames.Normalize(table);
+        if (TableNames.IsInternal(normalized) || string.Equals(normalized, TableNames.Default, StringComparison.Ordinal))
+            throw new ArgumentException("The default and internal tables cannot be dropped.", nameof(table));
+
+        await EnsureInitializedAsync(cancellationToken);
+        await _catalogMutex.WaitAsync(cancellationToken);
+        try
+        {
+            if (_views.ContainsKey(normalized))
+                throw new ArgumentException($"'{normalized}' is a view; DROP TABLE only accepts physical tables.", nameof(table));
+            if (!_stores.TryRemove(normalized, out var store))
+                return false;
+
+            try
+            {
+                await store.DeleteDataAsync();
+                _relationalSchemas.Remove(normalized);
+                await _indexes.RemoveTableAsync(normalized, cancellationToken);
+                await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
+                return true;
+            }
+            catch
+            {
+                _stores[normalized] = store;
+                throw;
+            }
+        }
+        finally
+        {
+            _catalogMutex.Release();
+        }
+    }
     public async Task<ViewDefinition?> GetViewAsync(string view, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -417,6 +460,10 @@ public sealed class DatabaseEngine
         return new DatabaseStats(stats, _sequenceGenerator.LastSequence);
     }
 
+    public long GetTotalDiskSizeBytes()
+    {
+        return GetDirectorySize(_options.DataPath);
+    }
     public async Task<TableStats> GetTableStatsAsync(string table)
     {
         var normalized = TableNames.Normalize(table);
@@ -428,7 +475,8 @@ public sealed class DatabaseEngine
             stats.SstableCount,
             stats.LastSequence,
             stats.FlushThreshold,
-            stats.BlockSizeBytes);
+            stats.BlockSizeBytes,
+            GetDirectorySize(Path.Combine(_tablesPath, normalized)));
     }
 
     private async Task<LsmStore> GetStoreAsync(string table)
@@ -444,6 +492,20 @@ public sealed class DatabaseEngine
         throw new TableNotFoundException(normalized);
     }
 
+    private static long GetDirectorySize(string path)
+    {
+        if (!Directory.Exists(path))
+            return 0;
+
+        long total = 0;
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            try { total += new FileInfo(file).Length; }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
+        return total;
+    }
     private async Task<IReadOnlyList<KeyValueRow>> ScanTableRowsForIndexAsync(string table)
     {
         if (_stores.TryGetValue(TableNames.Normalize(table), out var store))

@@ -89,6 +89,7 @@ class LsmWriteDbClient:
 
     def list_tables(self): return self._request("GET", "/tables")
     def create_table(self, table: str): return self._request("PUT", f"/tables/{self._quote(table)}")
+    def drop_table(self, table: str): return self._request("DELETE", f"/tables/{self._quote(table)}")
     def get(self, key: str, table: str = "kv"):
         path = f"/kv/{self._quote(key)}" if table == "kv" else f"/tables/{self._quote(table)}/kv/{self._quote(key)}"
         try: return self._request("GET", path)

@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 const string MonitoringPage = """
-<!doctype html><html><head><meta charset="utf-8"><title>LSM Cluster Monitoring</title><style>body{font-family:system-ui;margin:24px;background:#f5f7fb;color:#172033}.muted{color:#65728a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:white;border:1px solid #dbe2ee;border-radius:10px;padding:14px;margin:12px 0}.ok{color:#16834b}.down{color:#c33}.leader{background:#e9f8ef}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid #e5eaf2;text-align:left}th{background:#edf2fa}</style></head><body><h1>LSM Cluster Monitoring</h1><div class="muted">Router-local view · refreshes every 3 seconds · <span id="time">loading...</span></div><h2>Nodes</h2><div id="nodes" class="grid"></div><h2>Table ownership</h2><div id="tables"></div><script>async function refresh(){try{const d=await fetch('/monitoring/api/status').then(r=>r.json());document.getElementById('time').textContent=new Date(d.generatedAt).toLocaleString();document.getElementById('nodes').innerHTML=d.nodes.map(n=>`<div class="card"><b>${n.id}</b><div>${n.url}</div><p class="${n.reachable?'ok':'down'}">${n.reachable?'● reachable':'● unavailable'}</p></div>`).join('');document.getElementById('tables').innerHTML=d.tables.length?d.tables.map(t=>`<div class="card"><h3>${t.table}</h3><table><tr><th>Node</th><th>Role</th><th>Term</th><th>Leader</th></tr>${t.states.map(s=>`<tr class="${String(s.role).toLowerCase().includes('leader')?'leader':''}"><td>${s.node}</td><td>${s.role??'Unavailable'}</td><td>${s.term??'-'}</td><td>${s.leader??'-'}</td></tr>`).join('')}</table></div>`).join(''):'<p class="muted">No tables discovered.</p>'}catch(e){document.getElementById('time').textContent='monitoring unavailable: '+e}}refresh();setInterval(refresh,3000);</script></body></html>
+<!doctype html><html><head><meta charset="utf-8"><title>LSM Cluster Monitoring</title><style>body{font-family:system-ui;margin:24px;background:#f5f7fb;color:#172033}.muted{color:#65728a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:white;border:1px solid #dbe2ee;border-radius:10px;padding:14px;margin:12px 0}.ok{color:#16834b}.down{color:#c33}.leader{background:#e9f8ef}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid #e5eaf2;text-align:left}th{background:#edf2fa}</style></head><body><h1>LSM Cluster Monitoring</h1><div class="muted">Router-local view · refreshes every 3 seconds · <span id="time">loading...</span></div><h2>Nodes</h2><div id="nodes" class="grid"></div><h2>Table ownership</h2><div id="tables"></div><script>async function refresh(){try{const d=await fetch('/monitoring/api/status').then(r=>r.json());document.getElementById('time').textContent=new Date(d.generatedAt).toLocaleString();document.getElementById('nodes').innerHTML=d.nodes.map(n=>`<div class="card"><b>${n.id}</b><div>${n.url}</div><p class="${n.reachable?'ok':'down'}">${n.reachable?'● reachable':'● unavailable'}</p><p>read: active ${n.activeReads??'-'} / ${n.maxConcurrentReads??'-'} · queued ${n.queuedReads??'-'}</p><p>write: active ${n.activeWrites??'-'} / ${n.maxConcurrentWrites??'-'} · queued ${n.queuedWrites??'-'}</p><p>total storage: ${n.totalStorageKb==null?'-':n.totalStorageKb.toFixed(2)} KB</p></div>`).join('');document.getElementById('tables').innerHTML=d.tables.length?d.tables.map(t=>`<div class="card"><h3>${t.table}</h3><table><tr><th>Kind</th><th>Node</th><th>Size (KB)</th><th>Role</th><th>Term</th><th>Leader</th></tr>${t.states.map(s=>`<tr class="${String(s.role).toLowerCase().includes('leader')?'leader':''}"><td>${t.kind}</td><td>${s.node}</td><td>${s.sizeKb==null?'-':s.sizeKb.toFixed(2)}</td><td>${s.role??'Unavailable'}</td><td>${s.term??'-'}</td><td>${s.leader??'-'}</td></tr>`).join('')}</table></div>`).join(''):'<p class="muted">No tables discovered.</p>'}catch(e){document.getElementById('time').textContent='monitoring unavailable: '+e}}refresh();setInterval(refresh,3000);</script></body></html>
 """;
 
 
@@ -194,37 +194,90 @@ sealed class LeaderRouter
         }
         catch (Exception) when (body is not null) { return null; }
     }
-    public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken)
+public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken)
     {
-        var nodes = new[] { (Id: Environment.GetEnvironmentVariable("ROUTER_NODE_ID") ?? "local", Url: _localNode) }.Concat(_nodes.Select(pair => (Id: pair.Key, Url: pair.Value))).ToList();
+        var nodes = new[] { (Id: Environment.GetEnvironmentVariable("ROUTER_NODE_ID") ?? "local", Url: _localNode) }
+            .Concat(_nodes.Select(pair => (Id: pair.Key, Url: pair.Value))).ToList();
         var nodeResults = new List<object>();
         var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tableKinds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tableSizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var node in nodes)
         {
             try
             {
-                using var response = await _client.GetAsync(node.Url + "/tables", cancellationToken);
+                using var response = await SendMonitoringAsync(node.Url + "/tables", cancellationToken);
                 response.EnsureSuccessStatusCode();
                 using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
                 foreach (var table in document.RootElement.EnumerateArray())
                 {
                     if (table.TryGetProperty("name", out var name) || table.TryGetProperty("table", out name))
-                        tables.Add(name.GetString() ?? string.Empty);
+                    {
+                        var tableName = name.GetString() ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(tableName))
+                        {
+                            tables.Add(tableName);
+                            tableKinds[tableName] = table.TryGetProperty("kind", out var kind)
+                                ? kind.GetString() ?? "document"
+                                 : "document";
+                        }
+                    }
                 }
-                nodeResults.Add(new { id = node.Id, url = node.Url, reachable = true });
+
+                try
+                {
+                    var stats = await GetMonitoringJsonAsync<NodeStats>(node.Url + "/stats", cancellationToken);
+                    foreach (var tableStat in stats?.Tables ?? [])
+                        tableSizes[$"{node.Id}\n{tableStat.Table}"] = tableStat.DiskSizeBytes;
+                }
+                catch (HttpRequestException) { }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+                NodeMetrics? metrics = null;
+                try { metrics = await GetMonitoringJsonAsync<NodeMetrics>(node.Url + "/metrics", cancellationToken); }
+                catch (HttpRequestException) { }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+                nodeResults.Add(new
+                {
+                    id = node.Id,
+                    url = node.Url,
+                    reachable = true,
+                    activeRequests = metrics?.ActiveRequests,
+                    queuedRequests = metrics?.QueuedRequests,
+                    maxConcurrentRequests = metrics?.MaxConcurrentRequests,
+                    totalStorageKb = metrics?.TotalDiskSizeBytes is long bytes ? Math.Round(bytes / 1024d, 2) : (double?)null
+                });
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { nodeResults.Add(new { id = node.Id, url = node.Url, reachable = false, error = ex.Message }); }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                nodeResults.Add(new { id = node.Id, url = node.Url, reachable = false, activeRequests = (int?)null, queuedRequests = (int?)null, maxConcurrentRequests = (int?)null, totalStorageKb = (double?)null, error = ex.Message });
+            }
         }
+
         var tableResults = new List<object>();
         foreach (var table in tables.Where(value => !string.IsNullOrWhiteSpace(value)))
         {
+            var kind = tableKinds.TryGetValue(table, out var discoveredKind) ? discoveredKind : "document";
             var states = new List<object>();
             foreach (var node in nodes)
             {
-                try { var state = await _client.GetFromJsonAsync<MonitoringTableState>(node.Url + "/raft/tables/" + Uri.EscapeDataString(table) + "/state", cancellationToken); states.Add(new { node = node.Id, role = state?.Role, term = state?.CurrentTerm, leader = state?.LeaderId, leaderUrl = state?.LeaderUrl }); }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { states.Add(new { node = node.Id, role = "Unavailable", error = ex.Message }); }
+                if (string.Equals(kind, "view", StringComparison.OrdinalIgnoreCase))
+                {
+                    states.Add(new { node = node.Id, role = "View", term = (long?)null, leader = (string?)null, leaderUrl = (string?)null, sizeKb = (double?)null });
+                    continue;
+                }
+
+                try
+                {
+                    var state = await GetMonitoringJsonAsync<MonitoringTableState>(node.Url + "/raft/tables/" + Uri.EscapeDataString(table) + "/state", cancellationToken);
+                    states.Add(new { node = node.Id, role = state?.Role, term = state?.CurrentTerm, leader = state?.LeaderId, leaderUrl = state?.LeaderUrl, sizeKb = GetSizeKb(tableSizes, node.Id, table) });
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    states.Add(new { node = node.Id, role = "Unavailable", term = (long?)null, leader = (string?)null, leaderUrl = (string?)null, sizeKb = (double?)null, error = ex.Message });
+                }
             }
-            tableResults.Add(new { table, states });
+            tableResults.Add(new { table, kind, states });
         }
         return new { generatedAt = DateTimeOffset.UtcNow, nodes = nodeResults, tables = tableResults };
     }
@@ -395,6 +448,22 @@ sealed class LeaderRouter
         return "kv";
     }
 
+    private async Task<HttpResponseMessage> SendMonitoringAsync(string url, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("X-Monitoring-Request", "true");
+        var response = await _client.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return response;
+    }
+
+    private async Task<T?> GetMonitoringJsonAsync<T>(string url, CancellationToken cancellationToken)
+    {
+        using var response = await SendMonitoringAsync(url, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<T>(cancellationToken);
+    }
+    private static double? GetSizeKb(IReadOnlyDictionary<string, long> tableSizes, string node, string table)
+        => tableSizes.TryGetValue($"{node}\n{table}", out var bytes) ? Math.Round(bytes / 1024d, 2) : null;
     private static IReadOnlyDictionary<string, string> ParseNodes(string value)
         => value.Split(',', StringSplitOptions.RemoveEmptyEntries)
             .Select(item => item.Split('=', 2))
@@ -408,6 +477,9 @@ sealed class LeaderRouter
     }
 
     private sealed record TableInfo(string Name);
+    private sealed record NodeMetrics(int ActiveRequests, int QueuedRequests, int MaxConcurrentRequests, int ActiveReads, int QueuedReads, int MaxConcurrentReads, int ActiveWrites, int QueuedWrites, int MaxConcurrentWrites, long? TotalDiskSizeBytes);
+    private sealed record NodeStats(IReadOnlyList<NodeTableStat> Tables);
+    private sealed record NodeTableStat(string Table, long DiskSizeBytes);
     private sealed record RaftStatus(string? LeaderUrl, JsonElement Role);
     private sealed record MonitoringTableState(string? LeaderUrl, string? LeaderId, object? Role, long CurrentTerm);
 }
