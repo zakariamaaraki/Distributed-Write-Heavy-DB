@@ -48,6 +48,26 @@ public static class TableEndpoints
             }
         });
 
+        app.MapPut("/tables/{table}/relational", async (string table, RelationalTableSchema schema, DatabaseEngine db, TableRaftCoordinator coordinator, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var normalized = TableNames.Normalize(table);
+                if (!string.Equals(normalized, TableNames.Normalize(schema.Table), StringComparison.Ordinal))
+                    return Results.BadRequest(new { error = "route table and schema table must match" });
+
+                var created = await db.CreateRelationalTableAsync(schema with { Table = normalized }, cancellationToken);
+                await coordinator.EnsureTableAsync(normalized, cancellationToken);
+                var ready = await coordinator.WaitForLeaderAsync(normalized, cancellationToken);
+                return ready is null
+                    ? Results.Json(new { error = "table leader election is not ready" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : Results.Ok(new { table = normalized, created });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
         MapKeyValueRoutes(app, "/kv", TableNames.Default);
         MapKeyValueRoutes(app, "/tables/{table}/kv", tableName: null);
 

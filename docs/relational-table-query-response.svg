@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="880" viewBox="0 0 1500 880" role="img" aria-labelledby="title desc">
+  <title id="title">Relational table SQL query response</title>
+  <desc id="desc">A terminal-style SQL console showing creation, insertion, selection, and the JSON response for a relational users table.</desc>
+  <rect width="1500" height="880" fill="#101827"/>
+  <rect x="38" y="32" width="1424" height="816" rx="18" fill="#172235" stroke="#334155" stroke-width="2"/>
+  <rect x="38" y="32" width="1424" height="58" rx="18" fill="#243247"/>
+  <circle cx="76" cy="61" r="8" fill="#fb7185"/><circle cx="103" cy="61" r="8" fill="#fbbf24"/><circle cx="130" cy="61" r="8" fill="#34d399"/>
+  <text x="750" y="68" text-anchor="middle" fill="#cbd5e1" font-family="Arial,sans-serif" font-size="22" font-weight="600">LsmWriteDb — relational table query</text>
+  <g font-family="Consolas, 'Courier New', monospace" font-size="22">
+    <text x="78" y="135" fill="#67e8f9">sql&gt;</text>
+    <text x="150" y="135" fill="#f8fafc">CREATE RELATIONAL TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN);</text>
+    <text x="78" y="173" fill="#86efac">ok</text><text x="150" y="173" fill="#cbd5e1">CREATE RELATIONAL TABLE — table created</text>
+    <text x="78" y="231" fill="#67e8f9">sql&gt;</text>
+    <text x="150" y="231" fill="#f8fafc">INSERT INTO users VALUES ('42', '{"name":"Ada","active":true}');</text>
+    <text x="78" y="269" fill="#86efac">ok</text><text x="150" y="269" fill="#cbd5e1">INSERT — 1 row affected</text>
+    <text x="78" y="327" fill="#67e8f9">sql&gt;</text>
+    <text x="150" y="327" fill="#f8fafc">SELECT key, value FROM users WHERE key = '42';</text>
+    <text x="78" y="383" fill="#fbbf24">{</text>
+    <text x="112" y="421" fill="#cbd5e1">"statementType": </text><text x="335" y="421" fill="#86efac">"SELECT"</text><text x="445" y="421" fill="#cbd5e1">,</text>
+    <text x="112" y="459" fill="#cbd5e1">"rowsAffected": </text><text x="340" y="459" fill="#93c5fd">1</text><text x="355" y="459" fill="#cbd5e1">,</text>
+    <text x="112" y="497" fill="#cbd5e1">"rows": [</text>
+    <text x="146" y="535" fill="#cbd5e1">{ "key": </text><text x="250" y="535" fill="#86efac">"42"</text><text x="305" y="535" fill="#cbd5e1">, "value": </text><text x="450" y="535" fill="#86efac">"{&amp;quot;name&amp;quot;:&amp;quot;Ada&amp;quot;,&amp;quot;active&amp;quot;:true}"</text><text x="1050" y="535" fill="#cbd5e1"> }</text>
+    <text x="112" y="573" fill="#cbd5e1">]</text>
+    <text x="78" y="611" fill="#fbbf24">}</text>
+    <text x="78" y="690" fill="#64748b">-- The key is the immutable primary key; other columns remain JSON properties.</text>
+    <text x="78" y="748" fill="#67e8f9">sql&gt;</text><text x="150" y="748" fill="#f8fafc">UPDATE users SET value = '{"name":"Ada"}' WHERE key = '42';</text>
+    <text x="78" y="786" fill="#f87171">error</text><text x="170" y="786" fill="#fecaca">required column 'active' is missing</text>
+  </g>
+</svg>

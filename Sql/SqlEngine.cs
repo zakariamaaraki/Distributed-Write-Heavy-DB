@@ -183,6 +183,7 @@ public sealed class SqlEngine
     private async Task<SqlExecutionResult> InsertAsync(SqlInsertStatement statement, Guid? transactionId)
     {
         EnsureValidJsonValue(statement.Value);
+        await ValidateRelationalWriteAsync(statement.Table, statement.Key, statement.Value);
 
         if (transactionId is Guid id)
         {
@@ -326,6 +327,7 @@ public sealed class SqlEngine
     private async Task<SqlExecutionResult> UpdateAsync(SqlUpdateStatement statement, Guid? transactionId)
     {
         EnsureValidJsonValue(statement.Value);
+        await ValidateRelationalWriteAsync(statement.Table, statement.Key, statement.Value);
 
         if (transactionId is Guid id)
         {
@@ -381,19 +383,26 @@ public sealed class SqlEngine
             return SqlExecutionResult.Acknowledged("CREATE TABLE", rowsAffected: 0, message: "table already exists");
         }
 
-        var created = await _database.CreateTableAsync(statement.Table);
+        var created = statement.Schema is null
+            ? await _database.CreateTableAsync(statement.Table)
+            : await _database.CreateRelationalTableAsync(statement.Schema);
         if (_tableCoordinator is not null)
         {
             await _tableCoordinator.EnsureTableAsync(statement.Table);
             if (created)
-                await _tableCoordinator.EnsureTableOnPeersAsync(statement.Table);
+            {
+                if (statement.Schema is null)
+                    await _tableCoordinator.EnsureTableOnPeersAsync(statement.Table);
+                else
+                    await _tableCoordinator.EnsureRelationalTableOnPeersAsync(statement.Table, statement.Schema);
+            }
 
             var ready = await _tableCoordinator.WaitForLeaderAsync(statement.Table);
             if (ready is null)
                 throw new SqlExecutionException("table leader election is not ready", StatusCodes.Status503ServiceUnavailable);
         }
         return SqlExecutionResult.Acknowledged(
-            "CREATE TABLE",
+            statement.Schema is null ? "CREATE TABLE" : "CREATE RELATIONAL TABLE",
             rowsAffected: created ? 1 : 0,
             message: created ? "table created" : "table already exists");
     }
@@ -407,6 +416,20 @@ public sealed class SqlEngine
         }
 
         return result.Row;
+    }
+
+    private async Task ValidateRelationalWriteAsync(string table, string key, string value)
+    {
+        if (_database is null)
+            return;
+        try
+        {
+            await _database.ValidateWriteAsync(table, key, value);
+        }
+        catch (RelationalSchemaException ex)
+        {
+            throw new SqlExecutionException(ex.Message);
+        }
     }
 
     private async Task PutAsync(string table, string key, string value)

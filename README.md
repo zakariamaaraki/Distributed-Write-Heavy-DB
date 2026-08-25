@@ -339,7 +339,7 @@ The main pieces are:
 - `SqlEndpoints`: exposes `POST /sql` and converts parser/execution errors into
   HTTP responses.
 
-The SQL layer currently maps every database table to the same logical shape:
+The SQL layer maps schemaless database tables to the following logical shape:
 
 ```sql
 table_name(key string, value json)
@@ -348,6 +348,74 @@ table_name(key string, value json)
 This means SQL is a user-facing query language for the existing key/value store,
 not a separate storage engine or a full relational schema system. SQL `INSERT`
 and `UPDATE` values must be valid JSON documents.
+
+### Relational tables
+
+Relational tables add schema validation on top of the existing key/value tables.
+Create one with a typed primary key and JSON-backed columns:
+
+```sql
+CREATE RELATIONAL TABLE users (
+    id INT PRIMARY KEY,
+    name TEXT NOT NULL,
+    active BOOLEAN
+)
+```
+
+Rows continue to use the existing physical shape: the primary key is the table
+key, while the other columns are properties in the JSON value:
+
+```text
+key:   "42"
+value: {"name":"Ada","active":true}
+```
+
+The schema is stored in `data/catalog.json` under `relationalTables`. Relational
+writes are validated before entering the WAL. The validator rejects invalid
+primary-key types, missing `NOT NULL` columns, unknown properties, JSON values
+with the primary key duplicated, and property type mismatches. Nullable columns
+may be omitted or set to `null`. The primary key cannot be updated; change it
+with an explicit delete followed by an insert.
+
+Supported column types are `TEXT`, `INT`, `BIGINT`, `BOOLEAN`, and `DOUBLE`.
+Existing `CREATE TABLE` tables remain schemaless and keep their current behavior.
+See [the relational-table design](./design/relational-tables.md) for catalog
+format, validation rules, and current limitations.
+
+Example relational-table workflow:
+
+```sql
+CREATE RELATIONAL TABLE users (
+    id INT PRIMARY KEY,
+    name TEXT NOT NULL,
+    active BOOLEAN
+);
+
+INSERT INTO users VALUES ('42', '{"name":"Ada","active":true}');
+
+SELECT key, value FROM users WHERE key = '42';
+```
+
+The query returns the physical primary key and the JSON row value:
+
+```json
+{
+  "statementType": "SELECT",
+  "transactionId": null,
+  "rowsAffected": 1,
+  "rows": [
+    {
+      "key": "42",
+      "value": "{\"name\":\"Ada\",\"active\":true}"
+    }
+  ],
+  "message": null
+}
+```
+
+A terminal-style example, including schema validation, is shown below:
+
+![Relational table SQL query response](./docs/relational-table-query-response.svg)
 
 Submit SQL with:
 
@@ -879,11 +947,9 @@ from the storage engine.
 
 Leader election:
 
-![Raft leader election](./docs/raft-leader-election.gif?raw=true)
 
 Change-log subscription:
 
-![Raft change-log watch](./docs/raft-change-log-watch.gif?raw=true)
 
 Each node has a role:
 
@@ -1022,7 +1088,7 @@ frontend build step. The page posts queries to `/sql`, renders returned rows as 
 table, stores recent queries in browser local storage, and keeps the active
 transaction id in the console input.
 
-![SQL console screenshot](./docs/sql-console.png?raw=true)
+![SQL console screenshot](./docs/sql-console.svg?raw=true)
 
 The console has direct controls for `BEGIN`, `COMMIT`, and `ROLLBACK`. When
 `BEGIN` returns a transaction id, the console stores it and sends it with later
@@ -1037,7 +1103,7 @@ watching committed change-log events. Enter the last processed sequence, connect
 to the stream, and the page shows replayed and live events in a table. It uses
 `/changes/stream` for live updates and `/changes` for one-time replay.
 
-![Change log console screenshot](./docs/change-log-console.png?raw=true)
+![Change log console screenshot](./docs/change-log-console.svg?raw=true)
 
 ### Ordered MemTable
 

@@ -1,3 +1,5 @@
+using LsmWriteDb.Storage;
+
 namespace LsmWriteDb.Sql;
 
 internal sealed class SqlParser
@@ -75,6 +77,12 @@ internal sealed class SqlParser
 
     private SqlStatement ParseCreate()
     {
+        if (MatchKeyword("RELATIONAL"))
+        {
+            ExpectKeyword("TABLE");
+            return ParseCreateTable(relational: true);
+        }
+
         if (MatchKeyword("TABLE"))
         {
             return ParseCreateTable();
@@ -85,10 +93,9 @@ internal sealed class SqlParser
             return ParseCreateIndex();
         }
 
-        throw Error("Expected TABLE or INDEX.");
+        throw Error("Expected TABLE, RELATIONAL TABLE, or INDEX.");
     }
-
-    private SqlCreateTableStatement ParseCreateTable()
+    private SqlCreateTableStatement ParseCreateTable(bool relational = false)
     {
         if (MatchKeyword("IF"))
         {
@@ -96,9 +103,42 @@ internal sealed class SqlParser
             ExpectKeyword("EXISTS");
         }
 
-        return new SqlCreateTableStatement(ExpectTableName());
-    }
+        var table = ExpectTableName();
+        if (!relational)
+            return new SqlCreateTableStatement(table);
 
+        ExpectSymbol("(");
+        var columns = new List<RelationalColumnDefinition>();
+        do
+        {
+            var name = ExpectIdentifier().ToLowerInvariant();
+            var typeName = ExpectIdentifier();
+            if (!Enum.TryParse<RelationalColumnType>(typeName, ignoreCase: true, out var type))
+                throw Error($"Unknown relational column type {typeName}.");
+
+            var primaryKey = false;
+            var nullable = true;
+            if (MatchKeyword("PRIMARY"))
+            {
+                ExpectKeyword("KEY");
+                primaryKey = true;
+                nullable = false;
+            }
+            if (MatchKeyword("NOT"))
+            {
+                ExpectKeyword("NULL");
+                nullable = false;
+            }
+            columns.Add(new RelationalColumnDefinition(name, type, primaryKey, nullable));
+        }
+        while (MatchSymbol(","));
+        ExpectSymbol(")");
+
+        var schema = new RelationalTableSchema(table, columns);
+        try { schema.ValidateDefinition(); }
+        catch (RelationalSchemaException ex) { throw new SqlParseException(ex.Message); }
+        return new SqlCreateTableStatement(table, schema);
+    }
     private SqlCreateIndexStatement ParseCreateIndex()
     {
         if (MatchKeyword("IF"))

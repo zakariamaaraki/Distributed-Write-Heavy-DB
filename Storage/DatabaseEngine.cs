@@ -92,6 +92,7 @@ public sealed class DatabaseEngine
     private readonly ChangeLogService _changeLog;
     private readonly DatabaseSequenceGenerator _sequenceGenerator = new();
     private readonly ConcurrentDictionary<string, LsmStore> _stores = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RelationalTableSchema> _relationalSchemas = new(StringComparer.Ordinal);
     private readonly JsonValueIndexStore _indexes;
     private readonly SemaphoreSlim _catalogMutex = new(1, 1);
     private readonly string _tablesPath;
@@ -121,7 +122,10 @@ public sealed class DatabaseEngine
             Directory.CreateDirectory(_options.DataPath);
             Directory.CreateDirectory(_tablesPath);
 
-            var tableNames = await ReadCatalogAsync(cancellationToken);
+            var catalog = await ReadCatalogAsync(cancellationToken);
+            var tableNames = catalog.Tables.Select(TableNames.Normalize).ToHashSet(StringComparer.Ordinal);
+            foreach (var schema in catalog.RelationalTables ?? [])
+                _relationalSchemas[TableNames.Normalize(schema.Table)] = schema with { Table = TableNames.Normalize(schema.Table) };
             tableNames.Add(TableNames.Default);
             tableNames.Add(TableNames.Ownership);
 
@@ -169,6 +173,32 @@ public sealed class DatabaseEngine
     }
     public async Task<bool> CreateTableAsync(string table, CancellationToken cancellationToken = default)
     {
+        return await CreateTableCoreAsync(table, schema: null, cancellationToken);
+    }
+
+    public async Task<bool> CreateRelationalTableAsync(RelationalTableSchema schema, CancellationToken cancellationToken = default)
+    {
+        schema.ValidateDefinition();
+        var normalized = TableNames.Normalize(schema.Table);
+        return await CreateTableCoreAsync(normalized, schema with { Table = normalized }, cancellationToken);
+    }
+
+    public async Task<RelationalTableSchema?> GetRelationalSchemaAsync(string table, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        _relationalSchemas.TryGetValue(TableNames.Normalize(table), out var schema);
+        return schema;
+    }
+
+    public async Task ValidateWriteAsync(string table, string key, string value, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        if (_relationalSchemas.TryGetValue(TableNames.Normalize(table), out var schema))
+            schema.ValidateRow(key, value);
+    }
+
+    private async Task<bool> CreateTableCoreAsync(string table, RelationalTableSchema? schema, CancellationToken cancellationToken)
+    {
         var normalized = TableNames.Normalize(table);
         await EnsureInitializedAsync(cancellationToken);
 
@@ -176,12 +206,12 @@ public sealed class DatabaseEngine
         try
         {
             if (_stores.ContainsKey(normalized))
-            {
                 return false;
-            }
 
             var store = GetOrCreateStoreCore(normalized);
             await store.InitializeAsync();
+            if (schema is not null)
+                _relationalSchemas[normalized] = schema;
             await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
             return true;
         }
@@ -283,6 +313,9 @@ public sealed class DatabaseEngine
         }
 
         await EnsureInitializedAsync();
+
+        foreach (var operation in operations.Where(operation => !operation.IsDeleted))
+            await ValidateWriteAsync(operation.Table, operation.Key, operation.Value ?? string.Empty);
 
         foreach (var group in operations.GroupBy(operation => TableNames.Normalize(operation.Table)))
         {
@@ -412,25 +445,20 @@ public sealed class DatabaseEngine
         await InitializeAsync(cancellationToken);
     }
 
-    private async Task<HashSet<string>> ReadCatalogAsync(CancellationToken cancellationToken)
+    private async Task<TableCatalogSnapshot> ReadCatalogAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_catalogPath))
-        {
-            return [];
-        }
+            return new TableCatalogSnapshot([]);
 
         await using var stream = new FileStream(_catalogPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var catalog = await JsonSerializer.DeserializeAsync<TableCatalogSnapshot>(stream, JsonOptions, cancellationToken);
-        return catalog?.Tables
-            .Select(TableNames.Normalize)
-            .ToHashSet(StringComparer.Ordinal)
-            ?? [];
+        return await JsonSerializer.DeserializeAsync<TableCatalogSnapshot>(stream, JsonOptions, cancellationToken)
+            ?? new TableCatalogSnapshot([]);
     }
 
     private async Task WriteCatalogAsync(IReadOnlyList<string> tables, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_options.DataPath);
-        var snapshot = new TableCatalogSnapshot(tables);
+        var snapshot = new TableCatalogSnapshot(tables, _relationalSchemas.Values.OrderBy(schema => schema.Table, StringComparer.Ordinal).ToList());
         var json = JsonSerializer.Serialize(snapshot, JsonOptions);
         await File.WriteAllTextAsync(_catalogPath, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
     }
@@ -476,4 +504,4 @@ internal sealed class DatabaseSequenceGenerator : IStoreSequenceGenerator
     }
 }
 
-internal sealed record TableCatalogSnapshot(IReadOnlyList<string> Tables);
+internal sealed record TableCatalogSnapshot(IReadOnlyList<string> Tables, IReadOnlyList<RelationalTableSchema>? RelationalTables = null);

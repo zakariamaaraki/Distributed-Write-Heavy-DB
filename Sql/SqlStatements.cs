@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using LsmWriteDb.Storage;
 
 namespace LsmWriteDb.Sql;
 
@@ -39,7 +40,7 @@ internal sealed record SqlRollbackStatement() : SqlStatement("ROLLBACK");
 
 internal sealed record SqlShowTablesStatement() : SqlStatement("SHOW TABLES");
 
-internal sealed record SqlCreateTableStatement(string Table) : SqlStatement("CREATE TABLE");
+internal sealed record SqlCreateTableStatement(string Table, RelationalTableSchema? Schema = null) : SqlStatement(Schema is null ? "CREATE TABLE" : "CREATE RELATIONAL TABLE");
 
 internal sealed record SqlCreateIndexStatement(
     string Table,

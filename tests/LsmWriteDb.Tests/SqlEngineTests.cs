@@ -447,6 +447,41 @@ public sealed class SqlEngineTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RelationalTableValidatesJsonRowsAndTransactions()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            var create = await engine.ExecuteAsync(new SqlQueryRequest(
+                "CREATE RELATIONAL TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)", null));
+            Assert.Equal("CREATE RELATIONAL TABLE", create.StatementType);
+
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('1', '{\"name\":\"Ada\",\"active\":true}')", null));
+            var row = await engine.ExecuteAsync(new SqlQueryRequest("SELECT key, value FROM users WHERE key = '1'", null));
+            Assert.Single(row.Rows);
+
+            await Assert.ThrowsAsync<SqlExecutionException>(() => engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('2', '{\"active\":true}')", null)));
+            await Assert.ThrowsAsync<SqlExecutionException>(() => engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('3', '{\"name\":42,\"active\":true}')", null)));
+            await Assert.ThrowsAsync<SqlExecutionException>(() => engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('bad', '{\"name\":\"Bob\",\"active\":true}')", null)));
+
+            var begin = await engine.ExecuteAsync(new SqlQueryRequest("BEGIN", null));
+            await engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('4', '{\"name\":\"Grace\",\"active\":false}')", begin.TransactionId));
+            await Assert.ThrowsAsync<SqlExecutionException>(() => engine.ExecuteAsync(new SqlQueryRequest(
+                "INSERT INTO users VALUES ('5', '{\"name\":\"Linus\",\"unknown\":true}')", begin.TransactionId)));
+            await engine.ExecuteAsync(new SqlQueryRequest("ROLLBACK", begin.TransactionId));
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);
