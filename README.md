@@ -1,7 +1,17 @@
 # Simple Distibuted LSM-based Write Heavy Database
 
-This project is database backed by a write-optimized key/value store.
+This project is a distributed database backed by one write-optimized LSM
+storage engine. It exposes three data paradigms over that same engine:
 
+- **Key/value store**: opaque string values addressed by a string key.
+- **Document database**: JSON documents addressed by a string key, with optional
+  JSON property indexes and dot-path queries.
+- **Relational database**: schema-defined SQL tables whose rows are encoded as
+  JSON internally, with the primary key kept as the physical table key.
+
+The storage engine, WAL, memtables, SSTables, indexes, change log, replication,
+and transactions are shared. The paradigm-specific behavior lives at the API,
+SQL, catalog, and validation layers.
 ## Reading order
 
 
@@ -32,6 +42,7 @@ This document is organized from the distributed architecture down to the storage
 - Use read-your-writes with read-committed visibility for transactions; conflicting writes use last-commit-wins semantics, with no snapshot or serializable isolation.
 - Keep uncommitted transaction changes out of durable storage after a server crash.
 - Provide a modular SQL engine over the existing key/value and transaction APIs.
+- Support three compatible data paradigms: key/value, JSON document, and schema-enforced relational tables over the same storage engine.
 - Support SQL table creation, point reads, key range reads, inserts, updates,
   deletes, transaction control, and equality filters over JSON `value`
   documents or dot-path properties.

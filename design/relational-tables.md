@@ -2,6 +2,12 @@
 
 ## Overview
 
+The database exposes three data paradigms over the same storage engine:
+
+- Key/value tables store opaque string values under string keys.
+- Document tables store JSON values under string keys and may use JSON-property indexes.
+- Relational tables add SQL schemas and validation, while still encoding each row as JSON internally.
+
 Relational tables are a schema-enforced layer over the existing per-table LSM
 storage. The physical representation remains a string key plus a JSON value,
 so WAL recovery, memtables, SSTables, change-log publication, snapshots, and
