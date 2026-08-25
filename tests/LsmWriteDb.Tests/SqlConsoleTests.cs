@@ -19,7 +19,7 @@ public sealed class SqlConsoleTests
         Assert.Contains("id=\"readConsistency\"", html);
         Assert.Contains("Strong (table leader)", html);
         Assert.Contains("/changes-console", html);
-        Assert.Contains("ANSI: CREATE TABLE relational_users ...)", html);
+        Assert.Contains("ANSI: CREATE TABLE relational_users (...)", html);
         Assert.Contains("CREATE TABLE relational_users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, active BOOLEAN)", html);
         Assert.Contains("SELECT id, name, active FROM relational_users WHERE id = 42", html);
         Assert.Contains("CREATE INDEX idx_users_tier ON users (value.tier)", html);

@@ -53,6 +53,50 @@ public sealed class SqlCompatibilityTests
         finally { DeleteTempDataPath(dataPath); }
     }
 
+    [Fact]
+    public async Task View_IsPersistedAsCatalogObjectAndEvaluatesSelect()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users (key, value) VALUES ('u1', '{\"tier\":\"gold\"}')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE VIEW gold_users AS SELECT key, value FROM users WHERE value.tier = 'gold'", null));
+
+            var result = await engine.ExecuteAsync(new SqlQueryRequest("SELECT * FROM gold_users", null));
+            Assert.Single(result.Rows);
+            Assert.Equal("u1", result.Rows[0]["key"]);
+
+            var catalog = await File.ReadAllTextAsync(Path.Combine(dataPath, "catalog.json"));
+            Assert.Contains("\"kind\": \"view\"", catalog, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("gold_users", catalog, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { DeleteTempDataPath(dataPath); }
+    }
+
+    [Fact]
+    public async Task View_IsReadOnlyAndCanReadRelationalDefinition()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL)", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users (id, name) VALUES (7, 'Ada')", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE VIEW named_users AS SELECT id, name FROM users", null));
+
+            var result = await engine.ExecuteAsync(new SqlQueryRequest("SELECT * FROM named_users", null));
+            Assert.Single(result.Rows);
+            Assert.Equal("7", result.Rows[0]["id"]);
+            Assert.Equal("Ada", result.Rows[0]["name"]);
+
+            var error = await Assert.ThrowsAsync<SqlExecutionException>(() => engine.ExecuteAsync(
+                new SqlQueryRequest("DELETE FROM named_users WHERE key = '7'", null)));
+            Assert.Contains("read-only", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { DeleteTempDataPath(dataPath); }
+    }
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath)
     {
         var options = new LsmStoreOptions(dataPath, 100);

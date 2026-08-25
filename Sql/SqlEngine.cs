@@ -15,6 +15,7 @@ public sealed class SqlEngine
     private readonly TableRaftRoleGuard? _tableRoleGuard;
     private readonly DistributedTransactionManager? _distributedTransactions;
     private readonly TableRaftCoordinator? _tableCoordinator;
+    private readonly AsyncLocal<int> _viewDepth = new();
 
     public SqlEngine(LsmStore store, TransactionManager transactions)
         : this(store, transactions, roleGuard: null)
@@ -63,7 +64,8 @@ public sealed class SqlEngine
             and not SqlCommitStatement
             and not SqlRollbackStatement
             and not SqlShowTablesStatement
-            and not SqlCreateTableStatement)
+            and not SqlCreateTableStatement
+            and not SqlCreateViewStatement)
         {
             if (_tableRoleGuard is not null)
                 _tableRoleGuard.EnsureLeader(GetStatementTable(statement));
@@ -78,6 +80,7 @@ public sealed class SqlEngine
             SqlRollbackStatement => Rollback(request.TransactionId),
             SqlShowTablesStatement => await ShowTablesAsync(),
             SqlCreateTableStatement create => await CreateTableAsync(create),
+            SqlCreateViewStatement createView => await CreateViewAsync(createView),
             SqlCreateIndexStatement createIndex => await CreateIndexAsync(createIndex),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
             SqlSelectStatement select => await SelectAsync(select, request.TransactionId),
@@ -92,6 +95,7 @@ public sealed class SqlEngine
         return statement switch
         {
             SqlCreateTableStatement create => create.Table,
+            SqlCreateViewStatement createView => createView.Name,
             SqlCreateIndexStatement create => create.Table,
             SqlInsertStatement insert => insert.Table,
             SqlUpdateStatement update => update.Table,
@@ -107,10 +111,11 @@ public sealed class SqlEngine
         var rows = tableInfos
             .Select(table =>
             {
-                var status = _tableCoordinator?.GetStatus(table.Name);
+                var status = table.Kind == "view" ? null : _tableCoordinator?.GetStatus(table.Name);
                 return (IReadOnlyDictionary<string, string>)new Dictionary<string, string>
                 {
                     ["table"] = table.Name,
+                    ["kind"] = table.Kind,
                     ["leader"] = status?.LeaderId ?? string.Empty,
                     ["leaderUrl"] = status?.LeaderUrl ?? string.Empty
                 };
@@ -189,6 +194,7 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> InsertAsync(SqlInsertStatement statement, Guid? transactionId)
     {
+        await EnsureWritableTableAsync(statement.Table);
         EnsureValidJsonValue(statement.Value);
         await ValidateRelationalWriteAsync(statement.Table, statement.Key, statement.Value);
 
@@ -209,6 +215,27 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> SelectAsync(SqlSelectStatement statement, Guid? transactionId)
     {
+        if (_database is not null && transactionId is null)
+        {
+            var view = await _database.GetViewAsync(statement.Table);
+            if (view is not null)
+            {
+                if (_viewDepth.Value >= 16)
+                    throw new SqlExecutionException("View expansion depth exceeded; recursive views are not supported.");
+
+                _viewDepth.Value++;
+                try
+                {
+                    var result = await ExecuteAsync(new SqlQueryRequest(view.Query, null));
+                    var limit = Math.Clamp(statement.Limit, 1, 1_000);
+                    return result with { Rows = result.Rows.Take(limit).ToList(), RowsAffected = Math.Min(result.RowsAffected, limit) };
+                }
+                finally
+                {
+                    _viewDepth.Value--;
+                }
+            }
+        }
         if (statement.Join is not null)
         {
             if (transactionId is not null)
@@ -333,6 +360,7 @@ public sealed class SqlEngine
     }
     private async Task<SqlExecutionResult> UpdateAsync(SqlUpdateStatement statement, Guid? transactionId)
     {
+        await EnsureWritableTableAsync(statement.Table);
         EnsureValidJsonValue(statement.Value);
         await ValidateRelationalWriteAsync(statement.Table, statement.Key, statement.Value);
 
@@ -353,6 +381,7 @@ public sealed class SqlEngine
 
     private async Task<SqlExecutionResult> DeleteAsync(SqlDeleteStatement statement, Guid? transactionId)
     {
+        await EnsureWritableTableAsync(statement.Table);
         if (transactionId is Guid id)
         {
             if (!_transactions.TryStageDelete(id, statement.Table, statement.Key, out _))
@@ -382,6 +411,17 @@ public sealed class SqlEngine
             message: created ? "index created" : "index already exists");
     }
 
+    private async Task<SqlExecutionResult> CreateViewAsync(SqlCreateViewStatement statement)
+    {
+        if (_database is null)
+            throw new SqlExecutionException("CREATE VIEW requires the multi-table database engine.");
+
+        var created = await _database.CreateViewAsync(statement.Name, statement.Query);
+        return SqlExecutionResult.Acknowledged(
+            "CREATE VIEW",
+            rowsAffected: created ? 1 : 0,
+            message: created ? "view created" : "view already exists");
+    }
     private async Task<SqlExecutionResult> CreateTableAsync(SqlCreateTableStatement statement)
     {
         if (_database is null)
@@ -425,6 +465,11 @@ public sealed class SqlEngine
         return result.Row;
     }
 
+    private async Task EnsureWritableTableAsync(string table)
+    {
+        if (_database is not null && await _database.GetViewAsync(table) is not null)
+            throw new SqlExecutionException($"View '{table}' is read-only.");
+    }
     private async Task ValidateRelationalWriteAsync(string table, string key, string value)
     {
         if (_database is null)

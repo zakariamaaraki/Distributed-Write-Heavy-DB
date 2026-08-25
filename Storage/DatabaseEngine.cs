@@ -44,7 +44,7 @@ public static class TableNames
     }
 }
 
-public sealed record TableInfo(string Name);
+public sealed record TableInfo(string Name, string Kind = "table");
 
 public sealed record TableStats(
     string Table,
@@ -93,6 +93,7 @@ public sealed class DatabaseEngine
     private readonly DatabaseSequenceGenerator _sequenceGenerator = new();
     private readonly ConcurrentDictionary<string, LsmStore> _stores = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RelationalTableSchema> _relationalSchemas = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ViewDefinition> _views = new(StringComparer.Ordinal);
     private readonly JsonValueIndexStore _indexes;
     private readonly SemaphoreSlim _catalogMutex = new(1, 1);
     private readonly string _tablesPath;
@@ -126,6 +127,12 @@ public sealed class DatabaseEngine
             var tableNames = catalog.Tables.Select(TableNames.Normalize).ToHashSet(StringComparer.Ordinal);
             foreach (var schema in catalog.RelationalTables ?? [])
                 _relationalSchemas[TableNames.Normalize(schema.Table)] = schema with { Table = TableNames.Normalize(schema.Table) };
+            foreach (var view in catalog.Views ?? [])
+            {
+                var normalizedView = TableNames.Normalize(view.Name);
+                _views[normalizedView] = view with { Name = normalizedView, Kind = "view" };
+            }
+            tableNames.RemoveWhere(name => _views.ContainsKey(name));
             tableNames.Add(TableNames.Default);
             tableNames.Add(TableNames.Ownership);
 
@@ -160,8 +167,9 @@ public sealed class DatabaseEngine
 
         return _stores.Keys
             .Where(name => !TableNames.IsInternal(name))
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .Select(name => new TableInfo(name))
+            .Select(name => new TableInfo(name, "table"))
+            .Concat(_views.Values.Where(view => !TableNames.IsInternal(view.Name)).Select(view => new TableInfo(view.Name, "view")))
+            .OrderBy(table => table.Name, StringComparer.Ordinal)
             .ToList();
     }
 
@@ -169,7 +177,7 @@ public sealed class DatabaseEngine
     {
         await EnsureInitializedAsync(cancellationToken);
         return _stores.Keys.OrderBy(name => name, StringComparer.Ordinal)
-            .Select(name => new TableInfo(name)).ToList();
+            .Select(name => new TableInfo(name, "table")).ToList();
     }
     public async Task<bool> CreateTableAsync(string table, CancellationToken cancellationToken = default)
     {
@@ -183,6 +191,35 @@ public sealed class DatabaseEngine
         return await CreateTableCoreAsync(normalized, schema with { Table = normalized }, cancellationToken);
     }
 
+    public async Task<ViewDefinition?> GetViewAsync(string view, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        _views.TryGetValue(TableNames.Normalize(view), out var definition);
+        return definition;
+    }
+
+    public async Task<bool> CreateViewAsync(string view, string query, CancellationToken cancellationToken = default)
+    {
+        var normalized = TableNames.Normalize(view);
+        if (string.IsNullOrWhiteSpace(query))
+            throw new ArgumentException("View query is required.", nameof(query));
+
+        await EnsureInitializedAsync(cancellationToken);
+        await _catalogMutex.WaitAsync(cancellationToken);
+        try
+        {
+            if (_stores.ContainsKey(normalized) || _views.ContainsKey(normalized))
+                return false;
+
+            _views[normalized] = new ViewDefinition(normalized, query.Trim(), "view");
+            await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
+            return true;
+        }
+        finally
+        {
+            _catalogMutex.Release();
+        }
+    }
     public async Task<RelationalTableSchema?> GetRelationalSchemaAsync(string table, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -458,7 +495,7 @@ public sealed class DatabaseEngine
     private async Task WriteCatalogAsync(IReadOnlyList<string> tables, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_options.DataPath);
-        var snapshot = new TableCatalogSnapshot(tables, _relationalSchemas.Values.OrderBy(schema => schema.Table, StringComparer.Ordinal).ToList());
+        var snapshot = new TableCatalogSnapshot(tables, _relationalSchemas.Values.OrderBy(schema => schema.Table, StringComparer.Ordinal).ToList(), _views.Values.OrderBy(view => view.Name, StringComparer.Ordinal).ToList());
         var json = JsonSerializer.Serialize(snapshot, JsonOptions);
         await File.WriteAllTextAsync(_catalogPath, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
     }
@@ -504,4 +541,6 @@ internal sealed class DatabaseSequenceGenerator : IStoreSequenceGenerator
     }
 }
 
-internal sealed record TableCatalogSnapshot(IReadOnlyList<string> Tables, IReadOnlyList<RelationalTableSchema>? RelationalTables = null);
+public sealed record ViewDefinition(string Name, string Query, string Kind = "view");
+
+internal sealed record TableCatalogSnapshot(IReadOnlyList<string> Tables, IReadOnlyList<RelationalTableSchema>? RelationalTables = null, IReadOnlyList<ViewDefinition>? Views = null);

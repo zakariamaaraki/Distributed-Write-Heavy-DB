@@ -12,15 +12,16 @@ public static class TableEndpoints
             var tables = await db.ListTablesAsync();
             var result = tables.Select(table =>
             {
-                var status = coordinator.GetStatus(table.Name);
+                var status = table.Kind == "view" ? null : coordinator.GetStatus(table.Name);
                 return new
                 {
                     name = table.Name,
                     table = table.Name,
-                    leaderId = status.LeaderId,
-                    leaderUrl = status.LeaderUrl,
-                    role = status.Role.ToString(),
-                    term = status.CurrentTerm
+                    kind = table.Kind,
+                    leaderId = status?.LeaderId,
+                    leaderUrl = status?.LeaderUrl,
+                    role = status?.Role.ToString(),
+                    term = status?.CurrentTerm
                 };
             });
             return Results.Ok(result);

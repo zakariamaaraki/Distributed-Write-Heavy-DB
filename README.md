@@ -51,6 +51,7 @@ This document is organized from the distributed architecture down to the storage
 - Support disk-backed B+ tree indexes over JSON `value` documents or dot-path
   properties for equality searches.
 - Support inner equi-joins between tables on matching keys.
+- Support read-only SQL views stored as catalog metadata over key/value, document, and relational tables.
 - Elect one leader per table with multiple followers and rebalance table ownership when replicas join or leave.
 - Publish committed change-log events so replicas and external consumers can
   replay changes or subscribe over Server-Sent Events from a known sequence
@@ -392,6 +393,25 @@ Supported column types are `TEXT`, `INT`, `BIGINT`, `BOOLEAN`, and `DOUBLE`.
 Existing `CREATE TABLE` tables remain schemaless and keep their current behavior.
 See [the relational-table design](./design/relational-tables.md) for catalog
 format, validation rules, and current limitations.
+### Views
+
+Views are read-only named `SELECT` queries stored in the table catalog. They
+share the existing storage engine and do not create a second set of rows or
+SSTables. Each read evaluates the view definition against the current base
+table data:
+
+```sql
+CREATE VIEW gold_users AS
+SELECT key, value FROM users WHERE value.tier = 'gold';
+
+SELECT * FROM gold_users;
+```
+
+A view is exposed as a catalog object with `kind: "view"`; physical tables use
+`kind: "table"`. Views cannot be written to and have no independent WAL,
+SSTables, indexes, or table leader. The definition is stored in
+`data/catalog.json` under `views`. See [the views design](./design/views.md) for
+catalog format, execution semantics, and current limitations.
 
 Example relational-table workflow:
 
@@ -445,8 +465,10 @@ Submit SQL with:
 Supported statements:
 
 - `CREATE TABLE users`
-- `SHOW TABLES` (returns `table`, `leader`, and `leaderUrl` columns)
+- `SHOW TABLES` (returns `table`, `kind`, `leader`, and `leaderUrl` columns)
 - `CREATE TABLE IF NOT EXISTS users`
+- `CREATE VIEW gold_users AS SELECT key, value FROM users WHERE value.tier = 'gold'`
+- `SELECT * FROM gold_users`
 - `CREATE INDEX idx_users_tier ON users (value.tier)`
 - `BEGIN` or `BEGIN TRANSACTION`
 - `COMMIT` or `COMMIT TRANSACTION`

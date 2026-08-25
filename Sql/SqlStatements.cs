@@ -42,6 +42,8 @@ internal sealed record SqlShowTablesStatement() : SqlStatement("SHOW TABLES");
 
 internal sealed record SqlCreateTableStatement(string Table, RelationalTableSchema? Schema = null) : SqlStatement(Schema is null ? "CREATE TABLE" : "CREATE RELATIONAL TABLE");
 
+internal sealed record SqlCreateViewStatement(string Name, string Query) : SqlStatement("CREATE VIEW");
+
 internal sealed record SqlCreateIndexStatement(
     string Table,
     string Name,

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using LsmWriteDb.Storage;
 
 namespace LsmWriteDb.Sql;
@@ -14,6 +15,15 @@ internal sealed class SqlParser
 
     public static SqlStatement Parse(string sql)
     {
+        var viewMatch = Regex.Match(sql.Trim(), @"^CREATE\s+VIEW\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s+AS\s+(?<query>SELECT\s+.+?)\s*;?\s*$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (viewMatch.Success)
+        {
+            var query = viewMatch.Groups["query"].Value.Trim();
+            if (!Regex.IsMatch(query, @"^SELECT\b", RegexOptions.IgnoreCase))
+                throw new SqlParseException("A view definition must be a SELECT statement.");
+            return new SqlCreateViewStatement(viewMatch.Groups["name"].Value.ToLowerInvariant(), query);
+        }
+
         var parser = new SqlParser(SqlTokenizer.Tokenize(sql));
         var statement = parser.ParseStatement();
         parser.MatchSymbol(";");
@@ -72,7 +82,7 @@ internal sealed class SqlParser
             return ParseDelete();
         }
 
-        throw Error("Expected BEGIN, COMMIT, ROLLBACK, SHOW TABLES, CREATE, INSERT, SELECT, UPDATE, or DELETE.");
+        throw Error("Expected BEGIN, COMMIT, ROLLBACK, SHOW TABLES, CREATE, INSERT, SELECT, UPDATE, DELETE, or CREATE VIEW.");
     }
 
     private SqlStatement ParseCreate()
