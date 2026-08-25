@@ -43,6 +43,8 @@
           <button class="snippet ansi" data-query="SELECT id, name, active FROM relational_users WHERE id = 42">ANSI: SELECT relational_users WHERE id = 42</button>
           <button class="snippet ansi" data-query="UPDATE relational_users SET name = 'Grace' WHERE id = 42">ANSI: UPDATE relational_users SET ...</button>
           <button class="snippet ansi" data-query="DELETE FROM relational_users WHERE id = 42">ANSI: DELETE relational_users WHERE id = 42</button>
+          <button class="snippet ansi" data-query="CREATE VIEW gold_users AS SELECT key, value FROM users WHERE value.tier = 'gold'">ANSI: CREATE VIEW gold_users AS ...</button>
+          <button class="snippet ansi" data-query="SELECT * FROM gold_users">ANSI: SELECT * FROM gold_users</button>
           <button class="snippet" data-query="CREATE TABLE users">CREATE TABLE users</button>
           <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1001', '{&quot;name&quot;:&quot;Ada&quot;,&quot;tier&quot;:&quot;gold&quot;}')">INSERT INTO users (key, value) VALUES ('user:1001', '{"name":"Ada","tier":"gold"}')</button>
           <button class="snippet" data-query="INSERT INTO users (key, value) VALUES ('user:1002', '{&quot;name&quot;:&quot;Grace&quot;,&quot;tier&quot;:&quot;silver&quot;}')">INSERT INTO users (key, value) VALUES ('user:1002', '{"name":"Grace","tier":"silver"}')</button>
