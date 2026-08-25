@@ -50,6 +50,13 @@ public sealed class SqlEngine
             throw new SqlParseException("SQL query is required.");
         }
 
+        if (_database is not null)
+        {
+            var relationalResult = await new RelationalSqlExecutor(_database, _transactions).TryExecuteAsync(request.Query, request.TransactionId);
+            if (relationalResult is not null)
+                return relationalResult;
+        }
+
         var statement = SqlParser.Parse(request.Query);
         if (statement is not SqlSelectStatement
             and not SqlBeginStatement

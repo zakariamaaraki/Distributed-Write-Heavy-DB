@@ -11,7 +11,7 @@ A relational table is created with one primary-key column and zero or more JSON
 columns:
 
 ```sql
-CREATE RELATIONAL TABLE users (
+CREATE TABLE users (
     id INT PRIMARY KEY,
     name TEXT NOT NULL,
     active BOOLEAN

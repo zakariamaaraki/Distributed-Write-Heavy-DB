@@ -352,12 +352,12 @@ and `UPDATE` values must be valid JSON documents.
 ### Relational tables
 
 Relational tables add schema validation on top of the existing key/value tables.
-Create one with a typed primary key and JSON-backed columns:
+Create one with a typed primary key and JSON-backed columns. Standard `CREATE TABLE (...)` syntax is supported; `CREATE RELATIONAL TABLE` remains an alias:
 
 ```sql
-CREATE RELATIONAL TABLE users (
-    id INT PRIMARY KEY,
-    name TEXT NOT NULL,
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
     active BOOLEAN
 )
 ```
@@ -385,18 +385,22 @@ format, validation rules, and current limitations.
 Example relational-table workflow:
 
 ```sql
-CREATE RELATIONAL TABLE users (
-    id INT PRIMARY KEY,
-    name TEXT NOT NULL,
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
     active BOOLEAN
 );
 
-INSERT INTO users VALUES ('42', '{"name":"Ada","active":true}');
+INSERT INTO users (id, name, active) VALUES (42, 'Ada', TRUE);
 
-SELECT key, value FROM users WHERE key = '42';
+SELECT id, name, active FROM users WHERE id = 42;
+
+UPDATE users SET name = 'Grace' WHERE id = 42;
+
+DELETE FROM users WHERE id = 42;
 ```
 
-The query returns the physical primary key and the JSON row value:
+The query returns standard relational columns:
 
 ```json
 {
@@ -405,17 +409,18 @@ The query returns the physical primary key and the JSON row value:
   "rowsAffected": 1,
   "rows": [
     {
-      "key": "42",
-      "value": "{\"name\":\"Ada\",\"active\":true}"
+      "id": "42",
+      "name": "Ada",
+      "active": "True"
     }
   ],
   "message": null
 }
 ```
 
-A terminal-style example, including schema validation, is shown below:
+A terminal-style ANSI SQL example is shown below:
 
-![Relational table SQL query response](./docs/relational-table-query-response.svg)
+![ANSI SQL relational table query response](./docs/relational-table-query-response.svg)
 
 Submit SQL with:
 

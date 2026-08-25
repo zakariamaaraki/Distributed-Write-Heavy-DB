@@ -482,6 +482,35 @@ public sealed class SqlEngineTests
             DeleteTempDataPath(dataPath);
         }
     }
+    [Fact]
+    public async Task ExecuteAsync_UsesPortableSqlForRelationalTables()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var engine = await CreateEngineAsync(dataPath);
+            await engine.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, active BOOLEAN)", null));
+            await engine.ExecuteAsync(new SqlQueryRequest("INSERT INTO users (id, name, active) VALUES (42, 'Ada', TRUE)", null));
+
+            var selected = await engine.ExecuteAsync(new SqlQueryRequest("SELECT id, name, active FROM users WHERE id = 42", null));
+            Assert.Single(selected.Rows);
+            Assert.Equal("42", selected.Rows[0]["id"]);
+            Assert.Equal("Ada", selected.Rows[0]["name"]);
+            Assert.Equal("True", selected.Rows[0]["active"]);
+
+            await engine.ExecuteAsync(new SqlQueryRequest("UPDATE users SET name = 'Grace' WHERE id = 42", null));
+            var updated = await engine.ExecuteAsync(new SqlQueryRequest("SELECT name FROM users WHERE id = 42", null));
+            Assert.Equal("Grace", updated.Rows[0]["name"]);
+
+            await engine.ExecuteAsync(new SqlQueryRequest("DELETE FROM users WHERE id = 42", null));
+            var deleted = await engine.ExecuteAsync(new SqlQueryRequest("SELECT * FROM users WHERE id = 42", null));
+            Assert.Empty(deleted.Rows);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<SqlEngine> CreateEngineAsync(string dataPath, int flushThreshold = 100)
     {
         var options = new LsmStoreOptions(dataPath, flushThreshold);

@@ -104,8 +104,11 @@ internal sealed class SqlParser
         }
 
         var table = ExpectTableName();
-        if (!relational)
+        if (!relational && !MatchSymbol("("))
             return new SqlCreateTableStatement(table);
+
+        if (!relational)
+            _position--;
 
         ExpectSymbol("(");
         var columns = new List<RelationalColumnDefinition>();
@@ -113,8 +116,21 @@ internal sealed class SqlParser
         {
             var name = ExpectIdentifier().ToLowerInvariant();
             var typeName = ExpectIdentifier();
-            if (!Enum.TryParse<RelationalColumnType>(typeName, ignoreCase: true, out var type))
-                throw Error($"Unknown relational column type {typeName}.");
+            var normalizedType = typeName.ToUpperInvariant();
+            var type = normalizedType switch
+            {
+                "TEXT" or "CHAR" or "VARCHAR" or "VARCHAR2" => RelationalColumnType.Text,
+                "INT" or "INTEGER" => RelationalColumnType.Int,
+                "BIGINT" => RelationalColumnType.BigInt,
+                "BOOL" or "BOOLEAN" => RelationalColumnType.Boolean,
+                "DOUBLE" or "FLOAT" or "REAL" or "DECIMAL" or "NUMERIC" => RelationalColumnType.Double,
+                _ => throw Error($"Unknown relational column type {typeName}.")
+            };
+            if (MatchSymbol("("))
+            {
+                ExpectPositiveNumber();
+                ExpectSymbol(")");
+            }
 
             var primaryKey = false;
             var nullable = true;
