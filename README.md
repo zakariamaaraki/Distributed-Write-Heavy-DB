@@ -12,6 +12,27 @@ storage engine. It exposes three data paradigms over that same engine:
 The storage engine, WAL, memtables, SSTables, indexes, change log, replication,
 and transactions are shared. The paradigm-specific behavior lives at the API,
 SQL, catalog, and validation layers.
+
+
+```text
+SQL / Relational API
+        ↓
+Schema + validation + catalog
+        ↓
+Primary key → physical storage key
+        ↓
+LSM storage engine
+ ├── WAL
+ ├── MemTable
+ ├── SSTables
+ ├── Bloom filters
+ └── Compaction
+
+Secondary indexes
+        ↓
+Disk-backed B+ trees
+```
+
 ## Reading order
 
 
