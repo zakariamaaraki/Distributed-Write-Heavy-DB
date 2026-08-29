@@ -73,6 +73,48 @@ public sealed class FullTextSearchTests
     }
 
     [Fact]
+    public async Task SstableValueIndex_BuildsAndMaintainsFastEqualityLookups()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var database = await CreateDatabaseAsync(dataPath);
+            await database.CreateTableAsync("users");
+            await database.PutAsync("users", "1", "{\"tier\":\"gold\"}");
+            await database.PutAsync("users", "2", "{\"tier\":\"silver\"}");
+            Assert.True(await database.CreateSstableValueIndexAsync("users", "users_tier_fast", ["tier"]));
+
+            Assert.Equal(["1"], await database.TrySearchSstableValueIndexAsync("users", ["tier"], "gold"));
+            await database.PutAsync("users", "1", "{\"tier\":\"platinum\"}");
+            await database.DeleteAsync("users", "2");
+
+            Assert.Empty(await database.TrySearchSstableValueIndexAsync("users", ["tier"], "gold") ?? []);
+            Assert.Equal(["1"], await database.TrySearchSstableValueIndexAsync("users", ["tier"], "platinum"));
+            Assert.NotEmpty(Directory.GetFiles(Path.Combine(dataPath, "sstable-indexes", "users_tier_fast", "sstables"), "sstable-*.json"));
+        }
+        finally { DeleteTempDataPath(dataPath); }
+    }
+
+    [Fact]
+    public async Task SqlSurface_CanCreateSstableIndexAndUseItForEqualityFilter()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var database = await CreateDatabaseAsync(dataPath);
+            var sql = new SqlEngine(database, new LsmWriteDb.Transactions.TransactionManager(database));
+            await sql.ExecuteAsync(new SqlQueryRequest("CREATE TABLE users", null));
+            await sql.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('1', '{\"tier\":\"gold\"}')", null));
+            await sql.ExecuteAsync(new SqlQueryRequest("INSERT INTO users VALUES ('2', '{\"tier\":\"silver\"}')", null));
+            var create = await sql.ExecuteAsync(new SqlQueryRequest("CREATE INDEX users_tier_fast ON users (value.tier) USING FASTWRITE", null));
+            var result = await sql.ExecuteAsync(new SqlQueryRequest("SELECT * FROM users WHERE value.tier = 'gold'", null));
+
+            Assert.Equal("index created", create.Message);
+            Assert.Equal(["1"], result.Rows.Select(row => row["key"]));
+        }
+        finally { DeleteTempDataPath(dataPath); }
+    }
+    [Fact]
     public async Task SearchIndex_RestoresDefinitionsAndPostingsOnRestart()
     {
         var dataPath = CreateTempDataPath();

@@ -97,6 +97,7 @@ public sealed class DatabaseEngine
     private readonly Dictionary<string, RelationalTableSchema> _relationalSchemas = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ViewDefinition> _views = new(StringComparer.Ordinal);
     private readonly JsonValueIndexStore _indexes;
+    private readonly SstableValueIndexStore _sstableIndexes;
     private readonly FullTextSearchStore _search;
     private readonly SemaphoreSlim _catalogMutex = new(1, 1);
     private readonly string _tablesPath;
@@ -111,6 +112,7 @@ public sealed class DatabaseEngine
         _tablesPath = Path.Combine(options.DataPath, "tables");
         _catalogPath = Path.Combine(options.DataPath, "catalog.json");
         _indexes = new JsonValueIndexStore(options.DataPath);
+        _sstableIndexes = new SstableValueIndexStore(options);
         _search = new FullTextSearchStore(options);
     }
 
@@ -158,6 +160,7 @@ public sealed class DatabaseEngine
                 cancellationToken);
 
             await _search.InitializeAsync(_stores.Keys.ToHashSet(StringComparer.Ordinal), ScanTableRowsForIndexAsync, cancellationToken);
+            await _sstableIndexes.InitializeAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), ScanTableRowsForIndexAsync, cancellationToken);
             _initialized = true;
         }
         finally
@@ -225,6 +228,7 @@ public sealed class DatabaseEngine
                 _relationalSchemas.Remove(normalized);
                 await _indexes.RemoveTableAsync(normalized, cancellationToken);
                 await _search.RemoveTableAsync(normalized, cancellationToken);
+                await _sstableIndexes.RemoveTableAsync(normalized, cancellationToken);
                 await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
                 return true;
             }
@@ -354,6 +358,25 @@ public sealed class DatabaseEngine
         return await _indexes.TrySearchAsync(normalizedTable, path, expected, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<SstableValueIndexInfo>> ListSstableValueIndexesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return _sstableIndexes.List();
+    }
+
+    public async Task<bool> CreateSstableValueIndexAsync(string table, string name, IReadOnlyList<string> path, CancellationToken cancellationToken = default)
+    {
+        var normalizedTable = TableNames.Normalize(table);
+        await GetStoreAsync(normalizedTable);
+        return await _sstableIndexes.CreateAsync(normalizedTable, name, path, ScanTableRowsForIndexAsync, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>?> TrySearchSstableValueIndexAsync(string table, IReadOnlyList<string> path, string expected, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await GetStoreAsync(table);
+        return await _sstableIndexes.TrySearchAsync(table, path, expected, cancellationToken);
+    }
     public async Task<IReadOnlyList<SearchIndexDefinition>> ListSearchIndexesAsync(CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -385,6 +408,7 @@ public sealed class DatabaseEngine
         await store.PutAsync(key, value);
         await _indexes.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
         await _search.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
+        await _sstableIndexes.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
     }
 
     public async Task DeleteAsync(string table, string key)
@@ -394,6 +418,7 @@ public sealed class DatabaseEngine
         await store.DeleteAsync(key);
         await _indexes.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
         await _search.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
+        await _sstableIndexes.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
     }
 
     public async Task<KeyValueRow?> GetAsync(string table, string key)
@@ -446,11 +471,13 @@ public sealed class DatabaseEngine
                 {
                     await _indexes.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
                     await _search.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
+                    await _sstableIndexes.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
                 }
                 else
                 {
                     await _indexes.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
                     await _search.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
+                    await _sstableIndexes.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
                 }
             }
         }
@@ -474,11 +501,13 @@ public sealed class DatabaseEngine
         {
             await _indexes.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
             await _search.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
+            await _sstableIndexes.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
         }
         else
         {
             await _indexes.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
             await _search.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
+            await _sstableIndexes.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
         }
     }
 

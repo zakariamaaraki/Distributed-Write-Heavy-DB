@@ -249,6 +249,9 @@ internal sealed class SqlParser
         }
 
         ExpectSymbol(")");
+        var storage = "btree";
+        if (MatchKeyword("USING")) storage = ExpectIdentifier().ToLowerInvariant();
+        if (storage is not ("btree" or "fastwrite")) throw Error("CREATE INDEX USING must be BTREE or FASTWRITE.");
         return new SqlCreateIndexStatement(table, name, path);
     }
 

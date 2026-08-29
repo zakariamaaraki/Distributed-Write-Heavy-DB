@@ -52,7 +52,8 @@ internal sealed record SqlCreateSearchIndexStatement(string Table, string Name, 
 internal sealed record SqlCreateIndexStatement(
     string Table,
     string Name,
-    IReadOnlyList<string> Path) : SqlStatement("CREATE INDEX");
+    IReadOnlyList<string> Path,
+    string Storage = "btree") : SqlStatement("CREATE INDEX");
 
 internal sealed record SqlInsertStatement(string Table, string Key, string Value) : SqlStatement("INSERT");
 

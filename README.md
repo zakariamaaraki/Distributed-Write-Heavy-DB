@@ -499,6 +499,7 @@ Supported statements:
 - `CREATE VIEW gold_users AS SELECT key, value FROM users WHERE value.tier = 'gold'`
 - `SELECT * FROM gold_users`
 - `CREATE INDEX idx_users_tier ON users (value.tier)`
+- `CREATE INDEX idx_users_tier_fast ON users (value.tier) USING FASTWRITE` for write-heavy exact-value indexing
 - `BEGIN` or `BEGIN TRANSACTION`
 - `COMMIT` or `COMMIT TRANSACTION`
 - `ROLLBACK` or `ROLLBACK TRANSACTION`
@@ -691,6 +692,14 @@ Current limitations:
   path exactly matches an index definition.
 - Transactional reads do not use committed indexes because staged writes must be
   overlaid first.
+
+
+
+For write-heavy workloads, create the same exact-value index with `USING FASTWRITE`. This stores index entries through the LSM/SSTable path, so updates become append/flush/compact operations instead of synchronous B+ tree page rewrites:
+
+```sql
+CREATE INDEX idx_users_tier_fast ON users (value.tier) USING FASTWRITE;
+```
 
 ### Full-text search
 

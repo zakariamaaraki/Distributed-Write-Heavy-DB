@@ -433,7 +433,9 @@ public sealed class SqlEngine
             throw new SqlExecutionException("CREATE INDEX requires the multi-table database engine.");
         }
 
-        var created = await _database.CreateJsonValueIndexAsync(statement.Table, statement.Name, statement.Path);
+        var created = string.Equals(statement.Storage, "fastwrite", StringComparison.OrdinalIgnoreCase)
+            ? await _database.CreateSstableValueIndexAsync(statement.Table, statement.Name, statement.Path)
+            : await _database.CreateJsonValueIndexAsync(statement.Table, statement.Name, statement.Path);
         return SqlExecutionResult.Acknowledged(
             "CREATE INDEX",
             rowsAffected: created ? 1 : 0,
@@ -607,6 +609,10 @@ public sealed class SqlEngine
         }
 
         var keys = await _database.TrySearchJsonValueIndexAsync(
+            table,
+            where.ValuePredicate.Path,
+            where.ValuePredicate.Expected);
+        keys ??= await _database.TrySearchSstableValueIndexAsync(
             table,
             where.ValuePredicate.Path,
             where.ValuePredicate.Expected);
