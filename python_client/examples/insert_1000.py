@@ -1,4 +1,4 @@
-"""Create one relational table and fire one million concurrent insert requests."""
+"""Create one relational table and fire one thousand concurrent insert requests."""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from common import client_from_args
 
 TABLE = "python_benchmark_bulk"
-ROW_COUNT = 1_000_000
+ROW_COUNT = 1000
 
 
 def main() -> None:

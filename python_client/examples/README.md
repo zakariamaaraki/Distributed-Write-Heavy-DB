@@ -5,13 +5,13 @@ expect a running Router at `http://localhost:9081`; set `LSMWRITE_URL` or pass
 `--url` to target another Router or node.
 
 ```powershell
-python python_client/examples/insert_1m.py
+python python_client/examples/insert_1000.py
 python python_client/examples/distributed_100.py
 python python_client/examples/parallel_select.py
 python python_client/examples/cleanup.py
 ```
 
-The first script creates `python_benchmark_bulk` and inserts one million
+The first script creates `python_benchmark_bulk` and inserts one thousand
 relational rows with a prepared ANSI SQL statement. Use `--count` to run a
 smaller smoke test.
 
