@@ -2,6 +2,13 @@
 
 A distributed, write-optimized database built around one durable LSM storage engine. It exposes several ways to use the same data: key/value, JSON documents, SQL-shaped tables, exact-value indexes, and full-text search.
 
+The four supported data paradigms are:
+
+- **Key/value store**: opaque string values addressed by a string key. Use it for simple high-throughput reads and writes when the application owns the value format.
+- **Document database**: JSON documents addressed by a string key, with optional JSON property indexes and dot-path queries. Use it for flexible records whose shape can evolve without a fixed relational schema.
+- **Relational database**: schema-defined SQL tables whose rows are encoded as JSON internally, with the primary key kept as the physical table key. Use it when typed columns, primary keys, validation, SQL projections, joins, and transactions matter.
+- **Full-text search**: searchable text fields over ordinary tables, backed by SSTable-based inverted indexes with phrase matching and relevance ranking. Use it for terms, phrases, AND/OR queries, and ranked search across document fields.
+
 The central design rule is simple:
 
 > Keep the source table authoritative, make writes durable through the same WAL and SSTable pipeline, and build higher-level capabilities above that foundation.
