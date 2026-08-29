@@ -713,8 +713,6 @@ Base64("gold") U+001F Base64("user:1")  ->  empty value
 
 The write path extracts the old and new JSON values, appends a tombstone for the old index key and a put for the new key, then lets the normal WAL, memtable, flush, SSTable, Bloom-filter, sparse-index, and compaction pipeline persist the change. Equality lookup seeks the encoded value prefix, reads matching row keys, and rechecks the source rows before returning results. This favors write throughput and bounded memory; it does not provide ordered range scans like the B+ tree implementation.
 
-```
-
 ### Full-text search
 
 Full-text search is a separate search paradigm over ordinary document or key/value tables. A search index is an inverted index whose posting records are stored in an internal normal LSM table. Consequently, the index uses the same WAL, memtable, bounded SSTables, Bloom filters, sparse indexes, and compaction path as application tables. The source table remains authoritative.
