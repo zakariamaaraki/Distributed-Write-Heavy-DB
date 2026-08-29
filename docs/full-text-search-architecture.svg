@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Full-text search architecture</title>
+  <desc id="desc">The diagram shows search index creation from a normal source table, Raft propagation of the definition, posting rows stored in an internal LSM table and SSTables, and the query path to ranked results.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,3 L0,6 z" fill="#315b85"/></marker>
+    <marker id="green-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,3 L0,6 z" fill="#287a4b"/></marker>
+    <style>
+      .title { font: 700 28px Segoe UI, Arial, sans-serif; fill: #17324d; }
+      .section { font: 700 19px Segoe UI, Arial, sans-serif; fill: #17324d; }
+      .label { font: 600 16px Segoe UI, Arial, sans-serif; fill: #17324d; }
+      .small { font: 14px Segoe UI, Arial, sans-serif; fill: #365269; }
+      .code { font: 14px Consolas, monospace; fill: #243746; }
+      .box { stroke: #7295b3; stroke-width: 2; rx: 12; }
+      .arrow { stroke: #315b85; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .green { stroke: #287a4b; stroke-width: 3; fill: none; marker-end: url(#green-arrow); stroke-dasharray: 8 6; }
+    </style>
+  </defs>
+  <rect width="1400" height="900" fill="#f7fafc"/>
+  <text x="700" y="45" text-anchor="middle" class="title">SSTable-backed full-text search</text>
+  <text x="700" y="73" text-anchor="middle" class="small">Definitions propagate through Raft; posting data is derived locally from the authoritative source table.</text>
+
+  <rect x="35" y="105" width="1330" height="300" fill="#edf5fb" stroke="#a9c5dc" stroke-width="2" rx="18"/>
+  <text x="60" y="140" class="section">1. Create and persist the index</text>
+
+  <rect x="65" y="170" width="250" height="175" class="box" fill="#fff"/>
+  <text x="190" y="200" text-anchor="middle" class="label">Normal source table</text>
+  <text x="85" y="235" class="code">articles</text>
+  <text x="85" y="263" class="code">key: article:1</text>
+  <text x="85" y="291" class="code">title: Distributed DB</text>
+  <text x="85" y="319" class="code">body: database engine</text>
+
+  <rect x="365" y="170" width="260" height="175" class="box" fill="#fff"/>
+  <text x="495" y="200" text-anchor="middle" class="label">SQL or REST creation</text>
+  <text x="385" y="240" class="code">CREATE SEARCH INDEX</text>
+  <text x="385" y="267" class="code">articles_text ON articles</text>
+  <text x="385" y="294" class="code">(value.title, value.body)</text>
+  <text x="385" y="325" class="small">catalog definition</text>
+
+  <rect x="675" y="170" width="250" height="175" class="box" fill="#fff"/>
+  <text x="800" y="200" text-anchor="middle" class="label">Standard analyzer</text>
+  <text x="695" y="240" class="small">lowercase + Unicode tokens</text>
+  <text x="695" y="272" class="code">distributed, database</text>
+  <text x="695" y="304" class="small">frequency + positions</text>
+  <text x="695" y="330" class="small">field length</text>
+
+  <rect x="975" y="170" width="350" height="175" class="box" fill="#fff"/>
+  <text x="1150" y="200" text-anchor="middle" class="label">Internal normal LSM table</text>
+  <text x="995" y="240" class="code">__search_articles_text</text>
+  <text x="995" y="272" class="code">title␟database␟YXJ0aWNsZTox</text>
+  <text x="995" y="300" class="code">→ frequency, positions, length</text>
+  <text x="995" y="330" class="small">same WAL/memtable/SSTable path</text>
+
+  <path d="M315 258 H355" class="arrow"/><path d="M625 258 H665" class="arrow"/><path d="M925 258 H965" class="arrow"/>
+  <text x="950" y="150" class="small" fill="#287a4b">derived postings</text>
+
+  <rect x="365" y="365" width="260" height="25" fill="#dcefe3" stroke="#82b897" rx="8"/>
+  <text x="495" y="383" text-anchor="middle" class="small">Raft peers receive the definition</text>
+  <path d="M495 345 V360" class="green"/>
+  <path d="M625 377 H975" class="green"/>
+
+  <rect x="35" y="445" width="1330" height="390" fill="#fff8ed" stroke="#e5c58b" stroke-width="2" rx="18"/>
+  <text x="60" y="480" class="section">2. Search for text</text>
+
+  <rect x="65" y="520" width="245" height="170" class="box" fill="#fff"/>
+  <text x="187" y="550" text-anchor="middle" class="label">Query</text>
+  <text x="85" y="590" class="code">SEARCH articles_text</text>
+  <text x="85" y="618" class="code">MATCH 'database engine'</text>
+  <text x="85" y="650" class="small">SQL or POST /search/...</text>
+
+  <rect x="360" y="520" width="245" height="170" class="box" fill="#fff"/>
+  <text x="482" y="550" text-anchor="middle" class="label">Analyze query</text>
+  <text x="380" y="590" class="small">lowercase and tokenize</text>
+  <text x="380" y="620" class="code">database, engine</text>
+  <text x="380" y="650" class="small">phrase positions if quoted</text>
+
+  <rect x="655" y="520" width="285" height="170" class="box" fill="#fff"/>
+  <text x="797" y="550" text-anchor="middle" class="label">SSTable range reads</text>
+  <text x="675" y="590" class="code">title␟database␟*</text>
+  <text x="675" y="620" class="code">body␟database␟*</text>
+  <text x="675" y="650" class="small">retrieve matching postings</text>
+
+  <rect x="990" y="520" width="335" height="170" class="box" fill="#fff"/>
+  <text x="1157" y="550" text-anchor="middle" class="label">Rank and validate</text>
+  <text x="1010" y="590" class="small">BM25-style score:</text>
+  <text x="1010" y="620" class="small">rare terms + frequency</text>
+  <text x="1010" y="648" class="small">− long-field bias</text>
+  <text x="1010" y="676" class="small">fetch authoritative source row</text>
+
+  <path d="M310 605 H350" class="arrow"/><path d="M605 605 H645" class="arrow"/><path d="M940 605 H980" class="arrow"/>
+
+  <rect x="360" y="735" width="580" height="65" class="box" fill="#e8f4ec" stroke="#82b897"/>
+  <text x="650" y="762" text-anchor="middle" class="label">Ranked results</text>
+  <text x="650" y="786" text-anchor="middle" class="small">key, original value, relevance score</text>
+  <path d="M1157 690 V720 H940" class="arrow"/>
+</svg>

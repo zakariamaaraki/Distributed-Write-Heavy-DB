@@ -727,6 +727,8 @@ Content-Type: application/json
 ```
 
 Search uses Unicode letter/number tokenization so international text—such as accented Latin, Cyrillic, Arabic, Greek, or CJK content—is searchable instead of being discarded by an ASCII-only analyzer. Lowercasing makes searches case-insensitive while returned values remain unchanged. Search results are ranked because matching documents otherwise have no useful relevance order. BM25-style ranking rewards multiple and repeated matches, gives rarer terms more weight, and normalizes for field length; this generally places the most relevant documents on the first page. The current implementation uses k1 = 1.2, b = 0.75, and a fixed average-length approximation, so scores are intended for ordering rather than Elasticsearch-compatible numeric comparisons. Index updates are synchronous with source writes. Use `POST /search/{name}/rebuild` to reconstruct an index from the source table's current SSTable-backed rows. Fuzzy matching, stemming, wildcards, autocomplete, and aggregations are not part of the first version. See [the full-text search design](./design/full-text-search.md) for the posting layout and recovery model.
+![Full-text search creation, SSTable storage, Raft propagation, and query flow](./docs/full-text-search-architecture.svg)
+
 #### Internal inverted-index rows
 
 For example, this index:
