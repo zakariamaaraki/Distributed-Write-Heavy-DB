@@ -72,6 +72,8 @@ This document is organized from the distributed architecture down to the storage
   keeping the lower-level key/value storage string-based.
 - Support disk-backed B+ tree indexes over JSON `value` documents or dot-path
   properties for equality searches.
+- Support `USING FASTWRITE` exact-value indexes backed by the normal LSM/SSTable
+  write path for high-ingest workloads.
 - Support inner equi-joins between tables on matching keys.
 - Support read-only SQL views stored as catalog metadata over key/value, document, and relational tables.
 - Elect one leader per table with multiple followers and rebalance table ownership when replicas join or leave.
@@ -699,6 +701,18 @@ For write-heavy workloads, create the same exact-value index with `USING FASTWRI
 
 ```sql
 CREATE INDEX idx_users_tier_fast ON users (value.tier) USING FASTWRITE;
+```
+
+![FASTWRITE exact-value index write and lookup architecture](./docs/fastwrite-index-architecture.svg)
+
+FASTWRITE keeps the source table authoritative and stores one internal row for each `(indexedValue, rowKey)` pair. For example, a `gold` value for row `user:1` is encoded as:
+
+```text
+Base64("gold") U+001F Base64("user:1")  ->  empty value
+```
+
+The write path extracts the old and new JSON values, appends a tombstone for the old index key and a put for the new key, then lets the normal WAL, memtable, flush, SSTable, Bloom-filter, sparse-index, and compaction pipeline persist the change. Equality lookup seeks the encoded value prefix, reads matching row keys, and rechecks the source rows before returning results. This favors write throughput and bounded memory; it does not provide ordered range scans like the B+ tree implementation.
+
 ```
 
 ### Full-text search

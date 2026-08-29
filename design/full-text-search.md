@@ -46,3 +46,5 @@ There is no separate search-index WAL: the internal LsmStore WAL is the recovery
 Fuzzy matching, wildcards, stemming, aggregations, autocomplete, distributed shard routing, and a cost-based planner are intentionally outside version one. The posting layout leaves room for these later features without changing the source-table format.
 
 The same storage pattern is also available for exact-value secondary indexes. `CREATE INDEX name ON table (value.path) USING FASTWRITE` selects an LSM/SSTable-backed index; plain `CREATE INDEX` continues to select the existing B+ tree implementation.
+
+See the [FASTWRITE index architecture](../docs/fastwrite-index-architecture.svg) for the detailed write, storage, and equality-lookup flow.
