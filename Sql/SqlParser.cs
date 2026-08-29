@@ -57,6 +57,11 @@ internal sealed class SqlParser
             return new SqlShowTablesStatement();
         }
 
+        if (MatchKeyword("SEARCH"))
+        {
+            return ParseSearch();
+        }
+
         if (MatchKeyword("CREATE"))
         {
             return ParseCreate();
@@ -101,8 +106,29 @@ internal sealed class SqlParser
         }
         return new SqlDropTableStatement(ExpectTableName(), ifExists);
     }
+    private SqlSearchStatement ParseSearch()
+    {
+        var index = ExpectIdentifier();
+        ExpectKeyword("MATCH");
+        var query = ExpectStringLiteral();
+        var op = "or";
+        if (MatchKeyword("OPERATOR"))
+        {
+            op = ExpectIdentifier().ToLowerInvariant();
+            if (op is not ("and" or "or")) throw Error("SEARCH OPERATOR must be AND or OR.");
+        }
+        var limit = 20;
+        if (MatchKeyword("LIMIT")) limit = ExpectPositiveNumber();
+        return new SqlSearchStatement(index, query, op, limit);
+    }
     private SqlStatement ParseCreate()
     {
+        if (MatchKeyword("SEARCH"))
+        {
+            ExpectKeyword("INDEX");
+            return ParseCreateSearchIndex();
+        }
+
         if (MatchKeyword("RELATIONAL"))
         {
             ExpectKeyword("TABLE");
@@ -120,6 +146,23 @@ internal sealed class SqlParser
         }
 
         throw Error("Expected TABLE, RELATIONAL TABLE, or INDEX.");
+    }
+    private SqlCreateSearchIndexStatement ParseCreateSearchIndex()
+    {
+        var name = ExpectIndexName();
+        ExpectKeyword("ON");
+        var table = ExpectTableName();
+        ExpectSymbol("(");
+        var fields = new List<string>();
+        do
+        {
+            var parts = new List<string> { ExpectIdentifier() };
+            while (MatchSymbol(".")) parts.Add(ExpectIdentifier());
+            fields.Add(string.Join('.', parts));
+        }
+        while (MatchSymbol(","));
+        ExpectSymbol(")");
+        return new SqlCreateSearchIndexStatement(table, name, fields);
     }
     private SqlCreateTableStatement ParseCreateTable(bool relational = false)
     {

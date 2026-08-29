@@ -691,6 +691,84 @@ Current limitations:
 - Transactional reads do not use committed indexes because staged writes must be
   overlaid first.
 
+### Full-text search
+
+Full-text search is a separate search paradigm over ordinary document or key/value tables. A search index is an inverted index whose posting records are stored in an internal normal LSM table. Consequently, the index uses the same WAL, memtable, bounded SSTables, Bloom filters, sparse indexes, and compaction path as application tables. The source table remains authoritative.
+
+Create an index over JSON fields with SQL:
+
+```sql
+CREATE SEARCH INDEX articles_text
+ON articles (value.title, value.body);
+```
+
+Query it from SQL:
+
+```sql
+SEARCH articles_text MATCH 'distributed database' LIMIT 20;
+SEARCH articles_text MATCH '"database engine"' OPERATOR AND LIMIT 20;
+```
+
+The REST API provides the same capability:
+
+```http
+PUT /search/indexes/articles_text
+Content-Type: application/json
+
+{"table":"articles","fields":["value.title","value.body"]}
+```
+
+```http
+POST /search/articles_text
+Content-Type: application/json
+
+{"query":"distributed database","operator":"or","limit":20,"offset":0}
+```
+
+Search uses Unicode letter/number tokenization so international text—such as accented Latin, Cyrillic, Arabic, Greek, or CJK content—is searchable instead of being discarded by an ASCII-only analyzer. Lowercasing makes searches case-insensitive while returned values remain unchanged. Search results are ranked because matching documents otherwise have no useful relevance order. BM25-style ranking rewards multiple and repeated matches, gives rarer terms more weight, and normalizes for field length; this generally places the most relevant documents on the first page. The current implementation uses k1 = 1.2, b = 0.75, and a fixed average-length approximation, so scores are intended for ordering rather than Elasticsearch-compatible numeric comparisons. Index updates are synchronous with source writes. Use `POST /search/{name}/rebuild` to reconstruct an index from the source table's current SSTable-backed rows. Fuzzy matching, stemming, wildcards, autocomplete, and aggregations are not part of the first version. See [the full-text search design](./design/full-text-search.md) for the posting layout and recovery model.
+#### Internal inverted-index rows
+
+For example, this index:
+
+```sql
+CREATE SEARCH INDEX articles_text
+ON articles (value.title, value.body);
+```
+
+is stored as an internal LSM table named `__search_articles_text` under:
+
+```text
+data/search-indexes/articles_text/
+├── wal.log
+└── sstables/
+    ├── sstable-....json
+    ├── sstable-....bloom.json
+    └── sstable-....index.json
+```
+
+An example source row:
+
+```json
+{"key":"article:1","value":{"title":"Distributed Database","body":"A database engine"}}
+```
+
+produces ordinary internal key/value postings like these:
+
+```text
+title␟distributed␟YXJ0aWNsZTox
+→ {"frequency":1,"positions":[0],"length":2,"field":"title"}
+
+title␟database␟YXJ0aWNsZTox
+→ {"frequency":1,"positions":[1],"length":2,"field":"title"}
+
+body␟database␟YXJ0aWNsZTox
+→ {"frequency":1,"positions":[1],"length":3,"field":"body"}
+
+body␟engine␟YXJ0aWNsZTox
+→ {"frequency":1,"positions":[2],"length":3,"field":"body"}
+```
+
+The `␟` character represents the internal U+001F separator. The document key is Base64-encoded so arbitrary user keys cannot break the posting-key format. `frequency` supports scoring, `positions` supports phrase queries, and `length` supports field-length normalization in BM25-style ranking. These rows use the normal WAL, memtable, SSTable, Bloom-filter, sparse-index, and compaction paths, but remain hidden from user table listings. Search-index definitions are propagated through table Raft to peers; posting rows themselves are derived locally from each node's replicated source table rather than independently replicated.
 ### SQL JOINs
 
 The SQL engine supports inner equi-joins between two tables when their keys match:
@@ -765,6 +843,10 @@ LIMIT 100
 - `POST /transactions/{transactionId}/commit`: commit staged writes.
 - `DELETE /transactions/{transactionId}`: rollback and discard staged writes.
 - `GET /indexes`: list current SQL JSON value indexes.
+- `GET /search/indexes`: list full-text search indexes.
+- `PUT /search/indexes/{name}`: create a full-text index over source-table JSON fields.
+- `POST /search/{name}`: execute a ranked full-text query.
+- `POST /search/{name}/rebuild`: rebuild a full-text index from its source table.
 - `GET /indexes/btrees`: dump all current JSON value index B+ trees.
 - `GET /indexes/{name}/btree`: dump one JSON value index B+ tree.
 - `POST /sql`: execute a SQL statement against the table/key/value/index model.

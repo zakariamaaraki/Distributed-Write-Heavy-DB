@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using LsmWriteDb.Storage;
+using LsmWriteDb.Search;
 using Microsoft.Extensions.Logging;
 
 namespace LsmWriteDb.Raft;
@@ -172,6 +173,24 @@ var currentPeers = _members.Values.Where(peer => peer.NodeId != _options.NodeId)
                     $"{peer.Url.TrimEnd('/')}/views/{Uri.EscapeDataString(normalized)}",
                     new CreateViewRequest(query),
                     cancellationToken);
+                response.EnsureSuccessStatusCode();
+            }
+            catch (HttpRequestException) { }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+    }
+    public async Task EnsureSearchIndexOnPeersAsync(string name, string table, IReadOnlyList<string> fields, CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled) return;
+        var normalizedName = name.Trim().ToLowerInvariant();
+        var normalizedTable = TableNames.Normalize(table);
+        foreach (var peer in _members.Values)
+        {
+            try
+            {
+                using var response = await _httpClient.PutAsJsonAsync(
+                    $"{peer.Url.TrimEnd('/')}/raft/search-indexes/{Uri.EscapeDataString(normalizedName)}/ensure",
+                    new CreateSearchIndexRequest(normalizedTable, fields), cancellationToken);
                 response.EnsureSuccessStatusCode();
             }
             catch (HttpRequestException) { }

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Indexes;
+using LsmWriteDb.Search;
 
 namespace LsmWriteDb.Storage;
 
@@ -96,6 +97,7 @@ public sealed class DatabaseEngine
     private readonly Dictionary<string, RelationalTableSchema> _relationalSchemas = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ViewDefinition> _views = new(StringComparer.Ordinal);
     private readonly JsonValueIndexStore _indexes;
+    private readonly FullTextSearchStore _search;
     private readonly SemaphoreSlim _catalogMutex = new(1, 1);
     private readonly string _tablesPath;
     private readonly string _catalogPath;
@@ -109,6 +111,7 @@ public sealed class DatabaseEngine
         _tablesPath = Path.Combine(options.DataPath, "tables");
         _catalogPath = Path.Combine(options.DataPath, "catalog.json");
         _indexes = new JsonValueIndexStore(options.DataPath);
+        _search = new FullTextSearchStore(options);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -154,6 +157,7 @@ public sealed class DatabaseEngine
                 ScanTableRowsForIndexAsync,
                 cancellationToken);
 
+            await _search.InitializeAsync(_stores.Keys.ToHashSet(StringComparer.Ordinal), ScanTableRowsForIndexAsync, cancellationToken);
             _initialized = true;
         }
         finally
@@ -220,6 +224,7 @@ public sealed class DatabaseEngine
                 await store.DeleteDataAsync();
                 _relationalSchemas.Remove(normalized);
                 await _indexes.RemoveTableAsync(normalized, cancellationToken);
+                await _search.RemoveTableAsync(normalized, cancellationToken);
                 await WriteCatalogAsync(_stores.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(), cancellationToken);
                 return true;
             }
@@ -349,12 +354,37 @@ public sealed class DatabaseEngine
         return await _indexes.TrySearchAsync(normalizedTable, path, expected, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<SearchIndexDefinition>> ListSearchIndexesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return _search.List();
+    }
+
+    public async Task<bool> CreateSearchIndexAsync(string table, string name, IReadOnlyList<string> fields, CancellationToken cancellationToken = default)
+    {
+        var normalizedTable = TableNames.Normalize(table);
+        await GetStoreAsync(normalizedTable);
+        return await _search.CreateAsync(normalizedTable, name, fields, ScanTableRowsForIndexAsync, cancellationToken);
+    }
+
+    public async Task RebuildSearchIndexAsync(string name, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _search.RebuildAsync(name, ScanTableRowsForIndexAsync, cancellationToken);
+    }
+
+    public async Task<SearchResponse> SearchAsync(string name, SearchRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return await _search.SearchAsync(name, request, cancellationToken);
+    }
     public async Task PutAsync(string table, string key, string value)
     {
         var store = await GetStoreAsync(table);
         var oldRow = await store.GetAsync(key);
         await store.PutAsync(key, value);
         await _indexes.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
+        await _search.ApplyPutAsync(TableNames.Normalize(table), key, oldRow?.Value, value);
     }
 
     public async Task DeleteAsync(string table, string key)
@@ -363,6 +393,7 @@ public sealed class DatabaseEngine
         var oldRow = await store.GetAsync(key);
         await store.DeleteAsync(key);
         await _indexes.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
+        await _search.ApplyDeleteAsync(TableNames.Normalize(table), key, oldRow?.Value);
     }
 
     public async Task<KeyValueRow?> GetAsync(string table, string key)
@@ -414,10 +445,12 @@ public sealed class DatabaseEngine
                 if (operation.IsDeleted)
                 {
                     await _indexes.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
+                    await _search.ApplyDeleteAsync(group.Key, operation.Key, oldRowsByKey[operation.Key]);
                 }
                 else
                 {
                     await _indexes.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
+                    await _search.ApplyPutAsync(group.Key, operation.Key, oldRowsByKey[operation.Key], operation.Value ?? string.Empty);
                 }
             }
         }
@@ -440,10 +473,12 @@ public sealed class DatabaseEngine
         if (entry.IsDeleted)
         {
             await _indexes.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
+            await _search.ApplyDeleteAsync(table, entry.Key, oldRow?.Value);
         }
         else
         {
             await _indexes.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
+            await _search.ApplyPutAsync(table, entry.Key, oldRow?.Value, entry.Value ?? string.Empty);
         }
     }
 

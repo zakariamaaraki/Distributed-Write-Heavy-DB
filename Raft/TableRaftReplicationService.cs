@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using LsmWriteDb.ChangeLogs;
 using LsmWriteDb.Storage;
+using LsmWriteDb.Search;
 using Microsoft.Extensions.Logging;
 
 namespace LsmWriteDb.Raft;
@@ -63,6 +64,11 @@ public sealed class TableRaftReplicationService : BackgroundService
                     if (created)
                         await _coordinator.EnsureTableAsync(table.Name, cancellationToken);
                 }
+
+                var searchIndexes = await _httpClient.GetFromJsonAsync<List<SearchIndexDefinition>>(
+                    $"{peer.Url.TrimEnd('/')}/search/indexes", cancellationToken);
+                foreach (var index in searchIndexes ?? [])
+                    await _database.CreateSearchIndexAsync(index.Table, index.Name, index.Fields, cancellationToken);
             }
             catch (HttpRequestException) { }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { }

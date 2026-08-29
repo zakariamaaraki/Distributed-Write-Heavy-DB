@@ -46,6 +46,9 @@ internal sealed record SqlDropTableStatement(string Table, bool IfExists = false
 
 internal sealed record SqlCreateViewStatement(string Name, string Query) : SqlStatement("CREATE VIEW");
 
+internal sealed record SqlSearchStatement(string Index, string Query, string Operator, int Limit) : SqlStatement("SEARCH");
+internal sealed record SqlCreateSearchIndexStatement(string Table, string Name, IReadOnlyList<string> Fields) : SqlStatement("CREATE SEARCH INDEX");
+
 internal sealed record SqlCreateIndexStatement(
     string Table,
     string Name,

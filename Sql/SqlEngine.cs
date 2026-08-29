@@ -2,7 +2,9 @@ using LsmWriteDb.Storage;
 using LsmWriteDb.Raft;
 using LsmWriteDb.Transactions;
 using LsmWriteDb.Indexes;
+using LsmWriteDb.Search;
 using Microsoft.AspNetCore.Http;
+using System.Globalization;
 
 namespace LsmWriteDb.Sql;
 
@@ -66,7 +68,8 @@ public sealed class SqlEngine
             and not SqlShowTablesStatement
             and not SqlCreateTableStatement
             and not SqlCreateViewStatement
-            and not SqlDropTableStatement)
+            and not SqlDropTableStatement
+            and not SqlSearchStatement)
         {
             if (_tableRoleGuard is not null)
                 _tableRoleGuard.EnsureLeader(GetStatementTable(statement));
@@ -84,6 +87,8 @@ public sealed class SqlEngine
             SqlDropTableStatement drop => await DropTableAsync(drop),
             SqlCreateViewStatement createView => await CreateViewAsync(createView),
             SqlCreateIndexStatement createIndex => await CreateIndexAsync(createIndex),
+            SqlCreateSearchIndexStatement createSearchIndex => await CreateSearchIndexAsync(createSearchIndex),
+            SqlSearchStatement search => await SearchAsync(search, request.TransactionId),
             SqlInsertStatement insert => await InsertAsync(insert, request.TransactionId),
             SqlSelectStatement select => await SelectAsync(select, request.TransactionId),
             SqlUpdateStatement update => await UpdateAsync(update, request.TransactionId),
@@ -100,6 +105,7 @@ public sealed class SqlEngine
             SqlDropTableStatement drop => drop.Table,
             SqlCreateViewStatement createView => createView.Name,
             SqlCreateIndexStatement create => create.Table,
+            SqlCreateSearchIndexStatement create => create.Table,
             SqlInsertStatement insert => insert.Table,
             SqlUpdateStatement update => update.Table,
             SqlDeleteStatement delete => delete.Table,
@@ -400,6 +406,26 @@ public sealed class SqlEngine
         return SqlExecutionResult.Acknowledged("DELETE", rowsAffected: 1, transactionId);
     }
 
+    private async Task<SqlExecutionResult> CreateSearchIndexAsync(SqlCreateSearchIndexStatement statement)
+    {
+        if (_database is null) throw new SqlExecutionException("CREATE SEARCH INDEX requires the multi-table database engine.");
+        var created = await _database.CreateSearchIndexAsync(statement.Table, statement.Name, statement.Fields);
+        if (created && _tableCoordinator is not null)
+            await _tableCoordinator.EnsureSearchIndexOnPeersAsync(statement.Name, statement.Table, statement.Fields);
+        return SqlExecutionResult.Acknowledged("CREATE SEARCH INDEX", created ? 1 : 0, message: created ? "search index created" : "search index already exists");
+    }
+    private async Task<SqlExecutionResult> SearchAsync(SqlSearchStatement statement, Guid? transactionId)
+    {
+        if (_database is null) throw new SqlExecutionException("SEARCH requires the multi-table database engine.");
+        var result = await _database.SearchAsync(statement.Index, new SearchRequest(statement.Query, statement.Operator, statement.Limit));
+        var rows = result.Hits.Select(hit => (IReadOnlyDictionary<string, string>)new Dictionary<string, string>
+        {
+            ["key"] = hit.Key,
+            ["value"] = hit.Value,
+            ["score"] = hit.Score.ToString("R", CultureInfo.InvariantCulture)
+        }).ToList();
+        return SqlExecutionResult.WithRows("SEARCH", rows, transactionId);
+    }
     private async Task<SqlExecutionResult> CreateIndexAsync(SqlCreateIndexStatement statement)
     {
         if (_database is null)
