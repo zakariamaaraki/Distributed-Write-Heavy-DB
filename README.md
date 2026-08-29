@@ -1,13 +1,14 @@
 # Simple Distibuted LSM-based Write Heavy Database
 
 This project is a distributed database backed by one write-optimized LSM
-storage engine. It exposes three data paradigms over that same engine:
+storage engine. It exposes four data paradigms over that same engine:
 
 - **Key/value store**: opaque string values addressed by a string key.
 - **Document database**: JSON documents addressed by a string key, with optional
   JSON property indexes and dot-path queries.
 - **Relational database**: schema-defined SQL tables whose rows are encoded as
   JSON internally, with the primary key kept as the physical table key.
+- **Full-text search**: searchable text fields over ordinary tables, backed by SSTable-based inverted indexes with phrase matching and relevance ranking.
 
 The storage engine, WAL, memtables, SSTables, indexes, change log, replication,
 and transactions are shared. The paradigm-specific behavior lives at the API,
