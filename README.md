@@ -1,47 +1,139 @@
-# Distibuted LSM-based Write Heavy Database
+# Distributed Write-Heavy Database
 
-This project is a distributed database backed by one write-optimized LSM
-storage engine. It exposes four data paradigms over that same engine:
+A distributed, write-optimized database built around one durable LSM storage engine. It exposes several ways to use the same data: key/value, JSON documents, SQL-shaped tables, exact-value indexes, and full-text search.
 
-- **Key/value store**: opaque string values addressed by a string key.
-- **Document database**: JSON documents addressed by a string key, with optional
-  JSON property indexes and dot-path queries.
-- **Relational database**: schema-defined SQL tables whose rows are encoded as
-  JSON internally, with the primary key kept as the physical table key.
-- **Full-text search**: searchable text fields over ordinary tables, backed by SSTable-based inverted indexes with phrase matching and relevance ranking.
+The central design rule is simple:
 
-The storage engine, WAL, memtables, SSTables, indexes, change log, replication,
-and transactions are shared. The paradigm-specific behavior lives at the API,
-SQL, catalog, and validation layers.
+> Keep the source table authoritative, make writes durable through the same WAL and SSTable pipeline, and build higher-level capabilities above that foundation.
 
+## What this database gives you
 
-```text
-SQL / Relational API
-        ↓
-Schema + validation + catalog
-        ↓
-Primary key → physical storage key
-        ↓
-LSM storage engine
- ├── WAL
- ├── MemTable
- ├── SSTables
- ├── Bloom filters
- └── Compaction
+| Need | Capability | Storage model |
+|---|---|---|
+| Direct records | Key/value API | String key → opaque string value |
+| Flexible JSON | Document API and dot-path predicates | String key → JSON string |
+| Familiar queries | SQL and TCP SQL | `key` plus JSON-backed `value` |
+| Exact secondary lookup | B+ tree or `USING FASTWRITE` | Derived `(value, rowKey)` entries |
+| Text search | REST and SQL full-text search | Derived inverted-index postings |
+| Distributed writes | Per-table Raft ownership | One leader and replicated followers per table |
+| Cross-table changes | Local transactions and 2PC | Staged writes plus durable commit records |
+| External consumers | Ordered change log and SSE | Replayable committed events |
 
-Secondary indexes
-        ↓
-Disk-backed B+ trees
+## Start here
+
+### Run it locally
+
+```powershell
+dotnet run --project LsmWriteDb.csproj
 ```
 
-## Reading order
+The HTTP service listens on port `8080` by default. The TCP SQL listener uses
+`127.0.0.1:6543` when enabled. For a complete three-node deployment, use:
 
+```bash
+docker compose up --build
+```
 
+### First request
 
-This document is organized from the distributed architecture down to the storage engine: topology and ownership come first, followed by transaction semantics, client APIs, internal components, read/write paths, and on-disk layout.
+```powershell
+curl.exe -X PUT http://localhost:8080/tables/users
+curl.exe -X PUT http://localhost:8080/tables/users/kv/alice `
+  -H "Content-Type: application/json" `
+  -d '{"name":"Alice","tier":"gold"}'
+curl.exe http://localhost:8080/tables/users/kv/alice
+```
 
+### First SQL query
 
+```powershell
+curl.exe -X POST http://localhost:8080/sql `
+  -H "Content-Type: application/json" `
+  -d '{"query":"SELECT * FROM users WHERE value.tier = ''gold''"}'
+```
 
+For Docker, clustered routing, transactions, the Python client, or TCP SQL,
+jump to the corresponding section below.
+
+## Reader map
+
+1. [Goals and guarantees](#goals)
+2. [Architecture](#architecture)
+3. [Per-table leadership and Router](#per-table-leadership)
+4. [Transactions and consistency](#distributed-transactions)
+5. [Data model and SQL](#data-model)
+6. [Indexes and full-text search](#b-trees-and-json-value-indexes)
+7. [HTTP, Python, and TCP interfaces](#http-api)
+8. [Storage internals](#components)
+9. [Read/write paths and storage layout](#write-path)
+10. [Testing and deployment](#testing)
+
+## The one-minute mental model
+
+```text
+Client
+  │ REST / SQL / TCP SQL / Python
+  ▼
+Router (optional) ── discovers the table leader
+  ▼
+Table role guard ── leader accepts writes; followers serve reads
+  ▼
+Source table LSM store
+  ├─ WAL
+  ├─ ordered memtable
+  ├─ bounded SSTables
+  ├─ Bloom filters + sparse block indexes
+  └─ compaction
+       │
+       ├─ B+ tree exact-value index
+       ├─ FASTWRITE exact-value LSM index
+       ├─ full-text inverted index
+       └─ committed change log → follower replication / consumers
+```
+
+Source rows are authoritative. Indexes are derived structures that accelerate
+specific reads and can be rebuilt from source data. Search postings and
+`FASTWRITE` entries use the same LSM/SSTable machinery as ordinary tables.
+
+## Architecture
+
+### High-level architecture
+
+![High-level per-table leadership architecture](./docs/high-level-architecture.svg?raw=true)
+
+The cluster has independent leadership groups per table. A node may lead one
+table while following another. The internal `__table_ownership` table records
+which nodes currently own each table, the table term, leader URL, and rebalance
+identifier.
+
+### Low-level table flow
+
+![Low-level table election, write, and bootstrap flow](./docs/low-level-table-architecture.svg?raw=true)
+
+Writes first pass through the table-specific role guard. The table leader
+appends to that table's WAL and memtable, then publishes a committed event.
+Followers bootstrap with a table snapshot and continue from its sequence through
+the SSE change stream. Each follower filters the shared change log by table.
+
+Large flushes and compactions are represented as bounded immutable SSTable files.
+Each file has its own Bloom filter and sparse-index sidecars, so a large sorted
+run never requires one unbounded JSON data file. The configured maximum is a
+storage safety limit; a single oversized record/block may exceed it because a
+record is never split across blocks.
+### Supported architecture
+
+- Independent Raft terms, votes, heartbeats, and elections per table.
+- Multiple followers per table and different leaders for different tables.
+- Table-specific write rejection with the current leader URL.
+- Runtime peer registration through `POST /raft/membership/register`.
+- Health-based automatic and explicit rebalancing through `POST /raft/rebalance`.
+- Internal `__table_ownership` metadata storage, hidden from public table lists.
+- Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
+- Per-table applied sequence tracking and SSE reconnection.
+- Table-local WALs and shared database change-log events.
+- New tables are initially placed on the healthy node with the fewest user tables.
+- Table-catalog creation is propagated to every configured peer before writes are accepted.
+- Distributed transaction coordination uses two-phase commit across the affected table leaders.
 ## Goals
 
 - Optimize for frequent writes.
@@ -84,46 +176,6 @@ This document is organized from the distributed architecture down to the storage
 - Do not acknowledge table creation until the table has a discoverable elected leader.
 - Flush in-memory data to disk when a size threshold is reached.
 - Run compaction immediately after every flush.
-
-## Architecture
-
-### High-level architecture
-
-![High-level per-table leadership architecture](./docs/high-level-architecture.svg?raw=true)
-
-The cluster has independent leadership groups per table. A node may lead one
-table while following another. The internal `__table_ownership` table records
-which nodes currently own each table, the table term, leader URL, and rebalance
-identifier.
-
-### Low-level table flow
-
-![Low-level table election, write, and bootstrap flow](./docs/low-level-table-architecture.svg?raw=true)
-
-Writes first pass through the table-specific role guard. The table leader
-appends to that table's WAL and memtable, then publishes a committed event.
-Followers bootstrap with a table snapshot and continue from its sequence through
-the SSE change stream. Each follower filters the shared change log by table.
-
-Large flushes and compactions are represented as bounded immutable SSTable files.
-Each file has its own Bloom filter and sparse-index sidecars, so a large sorted
-run never requires one unbounded JSON data file. The configured maximum is a
-storage safety limit; a single oversized record/block may exceed it because a
-record is never split across blocks.
-### Supported architecture
-
-- Independent Raft terms, votes, heartbeats, and elections per table.
-- Multiple followers per table and different leaders for different tables.
-- Table-specific write rejection with the current leader URL.
-- Runtime peer registration through `POST /raft/membership/register`.
-- Health-based automatic and explicit rebalancing through `POST /raft/rebalance`.
-- Internal `__table_ownership` metadata storage, hidden from public table lists.
-- Follower snapshot bootstrap through `GET /tables/{table}/snapshot`.
-- Per-table applied sequence tracking and SSE reconnection.
-- Table-local WALs and shared database change-log events.
-- New tables are initially placed on the healthy node with the fewest user tables.
-- Table-catalog creation is propagated to every configured peer before writes are accepted.
-- Distributed transaction coordination uses two-phase commit across the affected table leaders.
 
 ## Per-Table Leadership
 
@@ -712,6 +764,18 @@ Base64("gold") U+001F Base64("user:1")  ->  empty value
 ```
 
 The write path extracts the old and new JSON values, appends a tombstone for the old index key and a put for the new key, then lets the normal WAL, memtable, flush, SSTable, Bloom-filter, sparse-index, and compaction pipeline persist the change. Equality lookup seeks the encoded value prefix, reads matching row keys, and rechecks the source rows before returning results. This favors write throughput and bounded memory; it does not provide ordered range scans like the B+ tree implementation.
+
+### Choosing an index
+
+Use the index type that matches the access pattern:
+
+| Index | Best for | Write behavior | Read behavior |
+|---|---|---|---|
+| B+ tree | Mature exact-value lookups and future ordered scans | Synchronous page updates | Exact lookup and ordered structure |
+| `FASTWRITE` | High-ingest exact-value lookups | WAL/memtable appends, flushes, and compaction | Encoded-value prefix seek, then source-row validation |
+| Full-text | Terms, phrases, AND/OR, and ranked text search | Posting mutations through an internal LSM table | Term range reads plus scoring and phrase checks |
+
+B+ tree and `FASTWRITE` indexes answer equality predicates such as `value.tier = 'gold'`. Full-text indexes answer analyzed text queries such as `distributed database`; they are not interchangeable because tokenization and ranking are part of the search contract.
 
 ### Full-text search
 
@@ -1454,6 +1518,8 @@ Runtime data lives under `data/`:
   next page id, and order.
 - `data/indexes/{index}/pages/page-*.json`: disk-backed B+ tree pages for that
   index.
+- `data/sstable-indexes/catalog.json`: FASTWRITE exact-value index definitions.
+- `data/sstable-indexes/{index}/`: hidden LSM/SSTable data for one FASTWRITE index.
 - `data/changelog.log`: legacy durable change-log file, still read during upgrade.
 - `data/changelog-*.log`: bounded numbered change-log segments; replay walks them in sequence order and the newest segment receives appends.
 - `data/raft-state.json`: persisted Raft term and vote.
