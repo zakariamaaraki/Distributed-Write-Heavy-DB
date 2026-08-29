@@ -1,4 +1,4 @@
-# Simple Distibuted LSM-based Write Heavy Database
+# Distibuted LSM-based Write Heavy Database
 
 This project is a distributed database backed by one write-optimized LSM
 storage engine. It exposes four data paradigms over that same engine:
