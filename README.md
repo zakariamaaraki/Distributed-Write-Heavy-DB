@@ -358,9 +358,8 @@ The trade-off is:
 | `strong` | Current table leader | Read-your-own-writes, account settings, checkout state, immediate confirmation | Leader latency and capacity; fails if the leader cannot be discovered |
 | `eventual` | Any healthy replica | Public profiles, feeds, recommendations, counters, high-volume browsing | A recently committed write may not be visible yet |
 | `session` (aliases: `monotonic`, `consistent-prefix`) | Healthy replica at or beyond `X-Read-After-Sequence` | Per-table read-your-own-writes, no backward movement, and ordered effects | Requires sequence tokens; may wait, use the leader, or fail while replicas catch up |
-Reads carrying a `transactionId` always go to the relevant table leader, regardless
-of the header, so the transaction can see its own staged writes. Uncommitted writes
-are not replicated to followers or published to the change log before `COMMIT`.
+
+Reads carrying a `transactionId` always go to the relevant table leader, regardless of the header, so the transaction can see its own staged writes. Uncommitted writes are not replicated to followers or published to the change log before `COMMIT`.
 
 The Router SQL console exposes an `Eventual`/`Strong` selector and sends the selected
 value as `X-Read-Consistency` with each SQL request. Session consistency is available to
