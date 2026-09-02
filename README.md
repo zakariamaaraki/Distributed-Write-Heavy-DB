@@ -263,6 +263,34 @@ Send `X-Read-Consistency: strong` when the read must go through the current tabl
 leader and return the leader's latest committed state. If the leader cannot be
 discovered, the strong read fails instead of falling back to a follower.
 
+### Choosing strong versus eventual reads
+
+Choose **strong consistency** when the caller must immediately observe the latest committed write. Strong reads are routed to the current table leader. This is the right choice for read-your-own-writes flows: for example, after a user updates their social-media profile, the following `GET /profile` should return the new profile immediately. Sending that read to a follower could briefly return the previous profile while replication catches up.
+
+```powershell
+curl.exe -X PUT http://localhost:9081/tables/profiles/kv/alice `
+  -H "Content-Type: application/json" `
+  -d '{"displayName":"Alice Smith"}'
+curl.exe http://localhost:9081/tables/profiles/kv/alice `
+  -H "X-Read-Consistency: strong"
+```
+
+Choose **eventual consistency** when a short propagation delay is acceptable and lower latency or higher read capacity is more important. Eventual reads are load-balanced across healthy replicas, so they are a good fit for browsing other users' profiles, timelines, public counters, recommendations, or other content where seeing a version that is briefly behind is acceptable.
+
+For example, after Alice changes her own profile, reading thousands of other public profiles does not require every request to wait for the profile table leader:
+
+```powershell
+curl.exe http://localhost:9081/tables/profiles/kv/bob `
+  -H "X-Read-Consistency: eventual"
+```
+
+The trade-off is:
+
+| Choice | Route | Best for | Trade-off |
+|---|---|---|---|
+| `strong` | Current table leader | Read-your-own-writes, account settings, checkout state, immediate confirmation | Leader latency and capacity; fails if the leader cannot be discovered |
+| `eventual` | Any healthy replica | Public profiles, feeds, recommendations, counters, high-volume browsing | A recently committed write may not be visible yet |
+
 Reads carrying a `transactionId` always go to the relevant table leader, regardless
 of the header, so the transaction can see its own staged writes. Uncommitted writes
 are not replicated to followers or published to the change log before `COMMIT`.
