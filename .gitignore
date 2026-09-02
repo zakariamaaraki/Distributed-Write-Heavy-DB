@@ -8,3 +8,6 @@ TestResults/
 __pycache__/
 *.py[cod]
 
+
+# Generated benchmark output
+benchmarks/results/

@@ -1,0 +1,17 @@
+services:
+  standalone:
+    build:
+      context: ..
+    container_name: lsm-write-db-benchmark-standalone
+    ports:
+      - "18080:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Lsm__FlushThreshold: 100
+      Lsm__BlockSizeBytes: 16384
+      Lsm__MaxSstableFileSizeBytes: 67108864
+      Raft__Enabled: "false"
+      TcpSql__Enabled: "false"
+    cpus: 2.0
+    mem_limit: 4g
+

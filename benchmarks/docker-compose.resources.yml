@@ -1,0 +1,20 @@
+services:
+  node-a:
+    cpus: 2.0
+    mem_limit: 4g
+  node-b:
+    cpus: 2.0
+    mem_limit: 4g
+  node-c:
+    cpus: 2.0
+    mem_limit: 4g
+  router-a:
+    cpus: 1.0
+    mem_limit: 1g
+  router-b:
+    cpus: 1.0
+    mem_limit: 1g
+  router-c:
+    cpus: 1.0
+    mem_limit: 1g
+

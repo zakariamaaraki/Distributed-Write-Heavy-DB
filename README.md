@@ -1563,6 +1563,22 @@ Run them with:
 dotnet test .\tests\LsmWriteDb.Tests\LsmWriteDb.Tests.csproj
 ```
 
+## Benchmarks
+
+The repository includes a reproducible HTTP benchmark suite for all four data
+paradigms in standalone and three-node distributed modes. It measures writes,
+reads, range or predicate queries, full-text index building, search latency,
+throughput, errors, p50/p95/p99 latency, and available Docker CPU/memory
+snapshots. See [benchmarks/README.md](./benchmarks/README.md) for setup and
+commands.
+
+Use small runs while developing:
+
+```powershell
+python benchmarks/run.py --mode standalone --records 1000 --concurrency 8
+python benchmarks/run.py --mode distributed --records 1000 --concurrency 8
+```
+
 ## Docker
 
 Build the image:
