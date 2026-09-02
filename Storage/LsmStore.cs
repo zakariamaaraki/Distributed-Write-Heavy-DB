@@ -61,6 +61,7 @@ public sealed record StoreStats(
 public sealed class LsmStore
 {
     private const string CommittedBatchWalEntryType = "committedBatch";
+    private const int CompactionTriggerRuns = 4;
     private static readonly JsonSerializerOptions WalJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly LsmStoreOptions _options;
@@ -443,33 +444,26 @@ public sealed class LsmStore
 
     private async Task CompactAsync()
     {
-        var files = _sstables.GetDataFilesNewestFirst();
-        if (files.Count == 0)
+        for (var tier = 0; ; tier++)
         {
-            return;
-        }
+            var runs = _sstables.GetRunsByTier(tier);
+            if (runs.Count < CompactionTriggerRuns)
+                break;
 
-        var newestByKey = new SortedDictionary<string, StoredRecord>(StringComparer.Ordinal);
-        foreach (var file in files)
-        {
-            foreach (var record in await _sstables.ReadTableAsync(file))
+            var files = runs.SelectMany(run => run).ToList();
+            var newestByKey = new SortedDictionary<string, StoredRecord>(StringComparer.Ordinal);
+            foreach (var file in files)
             {
-                KeepNewest(newestByKey, record);
+                foreach (var record in await _sstables.ReadTableAsync(file))
+                    KeepNewest(newestByKey, record);
             }
+
+            // Keep the newest tombstone. Older tiers may still contain the deleted
+            // value, so dropping it here would allow a deleted key to resurrect.
+            await _sstables.WriteTableAsync(newestByKey.Values.ToList(), tier + 1);
+            await _sstables.DeleteTablesAsync(files);
         }
-
-        var liveRecords = newestByKey.Values
-            .Where(record => !record.IsDeleted)
-            .ToList();
-
-        if (liveRecords.Count > 0)
-        {
-            await _sstables.WriteTableAsync(liveRecords);
-        }
-
-        await _sstables.DeleteTablesAsync(files);
     }
-
     private async Task<long> FindMaxSequenceAsync()
     {
         var maxSequence = 0L;

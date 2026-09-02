@@ -111,6 +111,7 @@ public sealed class SstableStoreTests
 
             var files = store.GetDataFilesNewestFirst();
             Assert.True(files.Count > 1);
+            Assert.Single(store.GetRunsByTier(0));
             Assert.All(files, file =>
             {
                 Assert.True(new FileInfo(file).Length <= 500);

@@ -88,9 +88,14 @@ Table role guard ── leader accepts writes; followers serve reads
 Source table LSM store
   ├─ WAL
   ├─ ordered memtable
-  ├─ bounded SSTables
-  ├─ Bloom filters + sparse block indexes
-  └─ compaction
+  ├─ Tier 0: multiple immutable SSTable runs
+  │    ├─ run A: sstable-001 + sstable-002
+  │    └─ run B: sstable-003 + sstable-004
+  ├─ four logical runs merge/promote to Tier 1
+  │    ├─ Tier 1: multiple bounded SSTables
+  │    └─ Tier 2: older promoted runs
+  ├─ Bloom filters + sparse block indexes per SSTable
+  └─ tiered compaction
        │
        ├─ B+ tree exact-value index
        ├─ FASTWRITE exact-value LSM index
@@ -122,7 +127,7 @@ appends to that table's WAL and memtable, then publishes a committed event.
 Followers bootstrap with a table snapshot and continue from its sequence through
 the SSE change stream. Each follower filters the shared change log by table.
 
-Large flushes and compactions are represented as bounded immutable SSTable files.
+Flushes and tiered compactions create multiple bounded immutable SSTable files grouped into logical runs.
 Each file has its own Bloom filter and sparse-index sidecars, so a large sorted
 run never requires one unbounded JSON data file. The configured maximum is a
 storage safety limit; a single oversized record/block may exceed it because a
@@ -182,7 +187,9 @@ record is never split across blocks.
 - Run independent Raft elections per table, with one leader and multiple followers per table.
 - Do not acknowledge table creation until the table has a discoverable elected leader.
 - Flush in-memory data to disk when a size threshold is reached.
-- Run compaction immediately after every flush.
+- Create a new tier-0 logical run after each flush and promote groups of four runs through higher tiers.
+- Keep each logical run as multiple immutable SSTable files when size requires it, grouped by a shared run ID.
+- Compact and promote logical runs by tier while preserving read correctness across all retained tiers.
 
 ## Per-Table Leadership
 
@@ -1533,7 +1540,7 @@ The memtable supports:
 
 ### SSTables
 
-Each table flush creates one immutable sorted run. The run is encoded as sorted
+Each table flush creates one immutable sorted Tier-0 logical run. The run is encoded as sorted
 JSON blocks and partitioned into one or more bounded physical SSTable files under
 the table's `sstables/` directory. Each physical data file has two sidecars:
 
@@ -1543,7 +1550,7 @@ the table's `sstables/` directory. Each physical data file has two sidecars:
 
 ![SSTable block storage, Bloom filter, and sparse index layout](./docs/sstable-block-index-architecture.svg)
 
-A physical SSTable file contains multiple blocks; a block is not itself an SSTable:
+A physical SSTable file belongs to a logical run identified by its `-L##-R<run-id>-` filename prefix. Multiple physical files can share one run ID; a block is not itself an SSTable:
 
 ```text
 SSTable run
@@ -1593,14 +1600,35 @@ sequence for each key, and discard tombstones.
 
 ### Compaction
 
-Compaction runs immediately after each flush. The compactor reads all SSTable
-files, keeps the newest record for each key, drops tombstones, and writes one
-compacted sorted run split into bounded SSTable files. New files are completed
-before old files are deleted, so a failed compaction does not remove the prior
-readable run.
+Each flush creates a new tier-0 logical run. A logical run may contain multiple
+physical SSTables when the file-size target is reached. When a tier reaches four
+logical runs, compaction merges those runs, keeps the newest sequence for each
+key, retains tombstones for safety, and writes one logical run into the next
+tier. Output files are completed before input files are deleted, so a failed
+compaction does not remove the prior readable runs. See [the tiered-compaction
+design](./design/tiered-compaction.md) for the run format, promotion policy,
+read path, and crash-safety rules.
 
-This keeps read and range-query amplification low while avoiding a full leveled
-LSM implementation.
+```text
+Flush 1 -> Tier 0: Run A
+Flush 2 -> Tier 0: Run B
+Flush 3 -> Tier 0: Run C
+Flush 4 -> Tier 0: Run D
+
+Tier 0: Run A + Run B + Run C + Run D
+                         |
+                         v
+Tier 1: existing Run E + existing Run F + new Run G
+                         |
+              (when Tier 1 reaches four runs)
+                         v
+Tier 2: promoted Run H
+```
+
+Tier 1 does not replace its existing runs when a Tier-0 compaction completes;
+the promoted run is added alongside them. If that makes four Tier-1 logical
+runs, Tier 1 is compacted and promoted to Tier 2. Each logical run may contain
+multiple physical SSTables, while reads merge all tiers by sequence.
 
 ## Write Path
 
@@ -1612,7 +1640,7 @@ LSM implementation.
 6. If the table memtable reaches the flush threshold:
    - write that table's memtable as a new SSTable,
    - clear that table's write-ahead log,
-   - compact that table's SSTables into one bounded sorted run.
+   - compact eligible logical runs and promote the merged output to the next tier.
 
 ## Point Read Path
 
@@ -1635,9 +1663,10 @@ LSM implementation.
 6. Drop tombstoned keys.
 7. Return up to `limit` records in sorted key order.
 
-Because compaction runs after every flush, the usual case for each table is one
-compacted run represented by one or more bounded SSTable files plus that table's
-active memtable.
+Each table can retain multiple logical runs across Tier 0 and older promoted
+tiers, with each run represented by one or more bounded SSTable files plus the
+active memtable. Reads merge these files by sequence, while tiered compaction
+promotes groups of four logical runs.
 
 ## Storage Layout
 

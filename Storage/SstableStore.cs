@@ -57,6 +57,39 @@ internal sealed class SstableStore
             .ToList();
     }
 
+    public List<string> GetDataFilesByTier(int tier)
+    {
+        return GetDataFilesNewestFirst()
+            .Where(path => GetTier(path) == tier)
+            .ToList();
+    }
+
+    public List<IReadOnlyList<string>> GetRunsByTier(int tier)
+    {
+        return GetDataFilesByTier(tier)
+            .GroupBy(GetRunId, StringComparer.Ordinal)
+            .Select(group => (IReadOnlyList<string>)group.OrderBy(path => path, StringComparer.Ordinal).ToList())
+            .ToList();
+    }
+
+    private static string GetRunId(string dataPath)
+    {
+        var name = Path.GetFileName(dataPath);
+        var marker = name.IndexOf("-R", StringComparison.Ordinal);
+        if (marker < 0) return name;
+        var start = marker + 2;
+        var end = name.IndexOf('-', start);
+        return end > start ? name[start..end] : name;
+    }
+    internal static int GetTier(string dataPath)
+    {
+        var name = Path.GetFileName(dataPath);
+        var marker = name.IndexOf("-L", StringComparison.Ordinal);
+        if (marker < 0) return 0;
+        var start = marker + 2;
+        var end = name.IndexOf('-', start);
+        return end > start && int.TryParse(name[start..end], out var tier) ? tier : 0;
+    }
     public async Task<IReadOnlyList<string>> GetCandidateDataFilesAsync(string key)
     {
         var candidates = new List<string>();
@@ -119,14 +152,15 @@ internal sealed class SstableStore
         return newest;
     }
 
-    public async Task WriteTableAsync(IReadOnlyList<StoredRecord> records)
+    public async Task<IReadOnlyList<string>> WriteTableAsync(IReadOnlyList<StoredRecord> records, int tier = 0)
     {
         if (records.Count == 0)
         {
-            return;
+            return [];
         }
 
         var createdFiles = new List<string>();
+        var runId = Guid.NewGuid().ToString("N");
         var fileBlocks = new List<EncodedBlock>();
         var fileBytes = 0;
         try
@@ -135,7 +169,7 @@ internal sealed class SstableStore
             {
                 if (fileBlocks.Count > 0 && fileBytes + block.Bytes.Length > _maxFileSizeBytes)
                 {
-                    createdFiles.Add(await WriteTableFileAsync(fileBlocks));
+                    createdFiles.Add(await WriteTableFileAsync(fileBlocks, tier, runId));
                     fileBlocks.Clear();
                     fileBytes = 0;
                 }
@@ -146,7 +180,7 @@ internal sealed class SstableStore
 
             if (fileBlocks.Count > 0)
             {
-                createdFiles.Add(await WriteTableFileAsync(fileBlocks));
+                createdFiles.Add(await WriteTableFileAsync(fileBlocks, tier, runId));
             }
         }
         catch
@@ -154,11 +188,12 @@ internal sealed class SstableStore
             await DeleteTablesAsync(createdFiles);
             throw;
         }
-    }
 
-    private async Task<string> WriteTableFileAsync(IReadOnlyList<EncodedBlock> blocks)
+        return createdFiles;
+    }
+    private async Task<string> WriteTableFileAsync(IReadOnlyList<EncodedBlock> blocks, int tier, string runId)
     {
-        var tableName = $"sstable-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfffffff}-{Guid.NewGuid():N}.json";
+        var tableName = $"sstable-L{tier:D2}-R{runId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfffffff}-{Guid.NewGuid():N}.json";
         var finalPath = Path.Combine(_sstableDirectory, tableName);
         var bloomPath = GetBloomPath(finalPath);
         var indexPath = GetIndexPath(finalPath);

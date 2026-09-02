@@ -137,7 +137,7 @@ public sealed class LsmStoreTests
         }
     }
     [Fact]
-    public async Task FlushAsync_WritesSortedSstableAndCompactsToSingleTable()
+    public async Task FlushAsync_WritesSortedSstablesAndRetainsTieredRuns()
     {
         var dataPath = CreateTempDataPath();
 
@@ -154,7 +154,7 @@ public sealed class LsmStoreTests
             var rows = await store.RangeAsync("alpha", "charlie", limit: 10);
 
             Assert.Equal(0, stats.MemTableEntries);
-            Assert.Equal(1, stats.SstableCount);
+            Assert.Equal(2, stats.SstableCount);
             Assert.Equal(["alpha", "bravo", "charlie"], rows.Select(row => row.Key));
             Assert.Equal(["updated", "two", "three"], rows.Select(row => row.Value));
         }
@@ -164,6 +164,31 @@ public sealed class LsmStoreTests
         }
     }
 
+    [Fact]
+    public async Task CompactionPromotesRunsBetweenTiersWithoutCollapsingTheTable()
+    {
+        var dataPath = CreateTempDataPath();
+        try
+        {
+            var store = await CreateStoreAsync(dataPath, flushThreshold: 2);
+
+            for (var number = 1; number <= 20; number++)
+                await store.PutAsync($"key:{number:000}", $"value-{number}");
+
+            var sstables = new SstableStore(dataPath);
+            var levelZero = sstables.GetDataFilesByTier(0);
+            var levelOne = sstables.GetDataFilesByTier(1);
+
+            Assert.Equal(2, levelZero.Count);
+            Assert.Equal(2, levelOne.Count);
+            Assert.All(levelZero.Concat(levelOne), file => Assert.Contains("-L", Path.GetFileName(file)));
+            Assert.Equal(20, (await store.ScanAsync()).Count);
+        }
+        finally
+        {
+            DeleteTempDataPath(dataPath);
+        }
+    }
     private static async Task<LsmStore> CreateStoreAsync(string dataPath, int flushThreshold = 100)
     {
         var store = new LsmStore(new LsmStoreOptions(dataPath, flushThreshold));
