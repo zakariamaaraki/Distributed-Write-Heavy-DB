@@ -145,7 +145,8 @@ record is never split across blocks.
 
 - Optimize for frequent writes.
 - Support point reads and range reads.
-- Support multiple read consistency levels: load-balanced eventual reads by default and
+- Support four read consistency choices: load-balanced eventual reads by default,
+  sequence-aware session reads (also called monotonic or consistent-prefix), and
   leader-routed strong reads when requested by the client.
 - Route all transactional reads through the relevant table leader for read-your-writes,
   while non-transactional reads follow the selected consistency level.
@@ -227,7 +228,7 @@ Router URL rather than a database node URL.
 Each database node can run with a companion `Router` process. The Router is an
 HTTP reverse proxy that keeps pooled, long-lived connections to the database
 nodes. Writes and transactional reads route to table leaders; ordinary reads are
-load-balanced across healthy replicas unless the client requests strong consistency.
+load-balanced across healthy replicas unless the client requests session or strong consistency.
 
 The Router:
 
@@ -263,7 +264,7 @@ Send `X-Read-Consistency: strong` when the read must go through the current tabl
 leader and return the leader's latest committed state. If the leader cannot be
 discovered, the strong read fails instead of falling back to a follower.
 
-### Choosing strong versus eventual reads
+### Choosing strong, eventual, or session reads
 
 Choose **strong consistency** when the caller must immediately observe the latest committed write. Strong reads are routed to the current table leader. This is the right choice for read-your-own-writes flows: for example, after a user updates their social-media profile, the following `GET /profile` should return the new profile immediately. Sending that read to a follower could briefly return the previous profile while replication catches up.
 
@@ -361,11 +362,13 @@ The trade-off is:
 
 Reads carrying a `transactionId` always go to the relevant table leader, regardless of the header, so the transaction can see its own staged writes. Uncommitted writes are not replicated to followers or published to the change log before `COMMIT`.
 
-The Router SQL console exposes an `Eventual`/`Strong` selector and sends the selected
-value as `X-Read-Consistency` with each SQL request. Session consistency is available to
-HTTP clients through sequence-token headers. Writes and transaction control
-remain leader/coordinator routed. Direct database-node requests bypass Router
-load balancing and read the local replica.
+The Router accepts four `X-Read-Consistency` values on HTTP and SQL requests:
+`eventual` (the default), `session`, `monotonic` (an alias for `session`),
+`consistent-prefix` (also an alias for `session`), and `strong`. The SQL console
+currently exposes an `Eventual`/`Strong` selector; clients that need session
+semantics can send the session header directly with their SQL request. Writes and
+transaction control remain leader/coordinator routed. Direct database-node requests
+bypass Router load balancing and read the local replica.
 
 Router-served reads include `X-Read-From` in the response headers so clients can see which database node returned the data.
 
@@ -398,7 +401,7 @@ http://localhost:9082/sql-console
 http://localhost:9083/sql-console
 ```
 
-The Router serves the console page and its JavaScript/CSS assets, then forwards the console's `POST /sql` requests. It reads the table names from the SQL statement, applies the selected consistency level, and returns the selected node in the `X-Read-From` response header. The browser therefore stays connected to the Router while table leadership and replica ownership remain internal cluster details.
+The Router serves the console page and its JavaScript/CSS assets, then forwards the console's `POST /sql` requests. It reads the table names from the SQL statement, applies the selected consistency level, and returns the selected node in the `X-Read-From` response header. The console offers eventual and strong routing controls; session, monotonic, and consistent-prefix routing are available through the HTTP header contract. The browser therefore stays connected to the Router while table leadership and replica ownership remain internal cluster details.
 ### Calling the database through the Router
 
 When using Docker Compose, send requests to the Router port instead of the database port:
