@@ -65,17 +65,25 @@ sealed class LeaderRouter
         var consistency = context.Request.Headers[ReadConsistencyHeader].ToString();
         if (!ReadConsistencyPolicy.TryParse(consistency, out var consistencyLevel))
         {
-            return Results.BadRequest(new { error = $"Unsupported {ReadConsistencyHeader} value. Use 'eventual' or 'strong'." });
+            return Results.BadRequest(new { error = $"Unsupported {ReadConsistencyHeader} value. Use 'eventual', 'monotonic', 'consistent-prefix', or 'strong'." });
         }
 
         var isRead = IsReadRequest(context, statement);
         var transactionalRead = requestTransactionId is not null
             || context.Request.Path.StartsWithSegments("/transactions");
+        var requiredSequence = 0L;
+        if (ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel)
+            && context.Request.Headers.TryGetValue(ReadConsistencyPolicy.AfterSequenceHeader, out var afterSequence)
+            && (!long.TryParse(afterSequence.ToString(), out requiredSequence) || requiredSequence < 0))
+            return Results.BadRequest(new { error = $"{ReadConsistencyPolicy.AfterSequenceHeader} must be a non-negative integer." });
+        var selectedSequence = 0L;
         var target = statement is "COMMIT" or "ROLLBACK"
             && requestTransactionId is Guid completionId
             && _transactionCoordinators.TryGetValue(completionId, out var coordinator)
                 ? coordinator
-                : isRead && !ReadConsistencyPolicy.ShouldRouteToLeader(isRead, transactionalRead, consistencyLevel)
+                : isRead && ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel)
+                    ? await ResolveSessionReplicaAsync(table, requiredSequence, cancellationToken, sequence => selectedSequence = sequence)
+                    : isRead && !ReadConsistencyPolicy.ShouldRouteToLeader(isRead, transactionalRead, consistencyLevel)
                     ? await ResolveReplicaAsync(table, cancellationToken)
                     : await ResolveLeaderAsync(table, cancellationToken);
         var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target + context.Request.PathBase + context.Request.Path + context.Request.QueryString);
@@ -109,7 +117,14 @@ sealed class LeaderRouter
             if (!string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase) && !string.Equals(header.Key, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) context.Response.Headers[header.Key] = header.Value.ToArray();
         context.Response.Headers.Remove("Transfer-Encoding");
         if (isRead)
+        {
             context.Response.Headers["X-Read-From"] = target;
+            if (ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel))
+            {
+                selectedSequence = Math.Max(selectedSequence, await GetNodeSequenceAsync(target, cancellationToken));
+                context.Response.Headers[ReadConsistencyPolicy.ReadSequenceHeader] = selectedSequence.ToString();
+            }
+        }
         context.Response.ContentLength = body.Length;
         context.Response.StatusCode = (int)response.StatusCode;
         await context.Response.Body.WriteAsync(body, cancellationToken);
@@ -281,6 +296,30 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
         }
         return new { generatedAt = DateTimeOffset.UtcNow, nodes = nodeResults, tables = tableResults };
     }
+    private async Task<string> ResolveSessionReplicaAsync(string table, long requiredSequence, CancellationToken cancellationToken, Action<long> selected)
+    {
+        var candidates = await GetHealthyReplicaCandidatesAsync(table, cancellationToken);
+        var observed = await Task.WhenAll(candidates.Select(async node => (Node: node, Sequence: await GetNodeSequenceAsync(node, cancellationToken))));
+        var eligible = observed.Where(item => item.Sequence >= requiredSequence).ToList();
+        if (eligible.Count == 0)
+        {
+            var leader = await ResolveLeaderAsync(table, cancellationToken);
+            var leaderSequence = await GetNodeSequenceAsync(leader, cancellationToken);
+            if (leaderSequence < requiredSequence) throw new InvalidOperationException($"No replica has applied sequence {requiredSequence}.");
+            selected(leaderSequence);
+            return leader;
+        }
+        var item = eligible[(int)(uint)Interlocked.Increment(ref _replicaCursor) % eligible.Count];
+        selected(item.Sequence);
+        return item.Node;
+    }
+
+    private async Task<long> GetNodeSequenceAsync(string node, CancellationToken cancellationToken)
+    {
+        var stats = await _client.GetFromJsonAsync<NodeStats>(node.TrimEnd('/') + "/stats", cancellationToken);
+        return stats?.LastSequence ?? 0;
+    }
+
     private async Task<string> ResolveReplicaAsync(string table, CancellationToken cancellationToken)
     {
         var nodes = await GetHealthyReplicaCandidatesAsync(table, cancellationToken);
@@ -332,8 +371,12 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
         if (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
             return true;
 
-        return context.Request.Path.Equals("/sql", StringComparison.OrdinalIgnoreCase)
-            && statement is "SELECT" or "SHOW TABLES";
+        if (context.Request.Path.Equals("/sql", StringComparison.OrdinalIgnoreCase))
+            return statement is "SELECT" or "SHOW TABLES" or "SEARCH";
+
+        return HttpMethods.IsPost(context.Request.Method)
+            && context.Request.Path.StartsWithSegments("/search")
+            && !(context.Request.Path.Value?.EndsWith("/rebuild", StringComparison.OrdinalIgnoreCase) == true);
     }
     private async Task<string> ResolveLeaderAsync(string table, CancellationToken cancellationToken)
     {
@@ -478,7 +521,7 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
 
     private sealed record TableInfo(string Name);
     private sealed record NodeMetrics(int ActiveRequests, int QueuedRequests, int MaxConcurrentRequests, int ActiveReads, int QueuedReads, int MaxConcurrentReads, int ActiveWrites, int QueuedWrites, int MaxConcurrentWrites, long? TotalDiskSizeBytes);
-    private sealed record NodeStats(IReadOnlyList<NodeTableStat> Tables);
+    private sealed record NodeStats(IReadOnlyList<NodeTableStat> Tables, long LastSequence);
     private sealed record NodeTableStat(string Table, long DiskSizeBytes);
     private sealed record RaftStatus(string? LeaderUrl, JsonElement Role);
     private sealed record MonitoringTableState(string? LeaderUrl, string? LeaderId, object? Role, long CurrentTerm);

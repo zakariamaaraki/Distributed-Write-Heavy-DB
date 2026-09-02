@@ -28,8 +28,22 @@ public sealed class ReadConsistencyPolicyTests
     {
         Assert.Equal("SELECT", ReadConsistencyPolicy.ClassifySqlStatement("  SELECT * FROM users"));
         Assert.Equal("SHOW TABLES", ReadConsistencyPolicy.ClassifySqlStatement("SHOW TABLES"));
+        Assert.Equal("SEARCH", ReadConsistencyPolicy.ClassifySqlStatement("SEARCH articles MATCH 'database'"));
         Assert.Null(ReadConsistencyPolicy.ClassifySqlStatement("INSERT INTO users VALUES ('x')"));
     }
+    [Fact]
+    public void SessionConsistencyModesUseSequenceTokensWithoutForcingTheLeader()
+    {
+        Assert.True(ReadConsistencyPolicy.TryParse("monotonic", out var monotonic));
+        Assert.True(ReadConsistencyPolicy.TryParse("consistent-prefix", out var prefix));
+        Assert.True(ReadConsistencyPolicy.TryParse("session", out var session));
+        Assert.Equal(ReadConsistencyLevel.ConsistentPrefix, prefix);
+        Assert.Equal(ReadConsistencyLevel.ConsistentPrefix, session);
+        Assert.True(ReadConsistencyPolicy.RequiresSessionSequence(monotonic));
+        Assert.True(ReadConsistencyPolicy.RequiresSessionSequence(prefix));
+        Assert.False(ReadConsistencyPolicy.ShouldRouteToLeader(true, false, monotonic));
+    }
+
     [Fact]
     public void UnknownHeaderValueIsRejected()
     {

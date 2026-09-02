@@ -253,7 +253,7 @@ dotnet run --project Router/Router.csproj --urls http://localhost:9080
 
 ### Read routing and consistency
 
-The Router supports two consistency levels for ordinary point and range reads. The
+The Router supports four consistency choices for ordinary point and range reads. The
 default is eventual consistency: when `X-Read-Consistency` is absent or set to
 `eventual`, the Router load-balances the read across healthy replicas. A follower
 may be briefly behind while it catches up from the leader's committed change
@@ -284,19 +284,87 @@ curl.exe http://localhost:9081/tables/profiles/kv/bob `
   -H "X-Read-Consistency: eventual"
 ```
 
+### Session consistency: monotonic reads and consistent prefixes
+
+The `session` consistency mode provides more continuity than ordinary eventual
+reads without requiring every request to use the leader. `monotonic` and
+`consistent-prefix` are accepted aliases for the same implementation. Because
+each table has its own leader and replication sequence, these guarantees apply
+per table; they are not a single global ordering across all tables.
+
+**1. Monotonic reads**
+
+Guarantee: once a client has seen a version of a table, a later read in that
+session never returns an older version.
+
+Without this guarantee, requests can hit different replicas and appear to go
+backward in time:
+
+```text
+Request 1 -> Replica A -> likes = 10
+Request 2 -> Replica B -> likes = 8   (bad: the session went backward)
+```
+
+With session consistency, the second read returns `likes = 10` or a newer
+value. Think: **“my own view of this table should never go backward.”**
+
+A client may first read Alice's profile at sequence `120`. The Router returns
+`X-Read-Sequence: 120` (or newer). The client sends that value on its next
+request, and the Router only chooses a replica that has applied sequence `120`
+or later.
+
+```powershell
+curl.exe http://localhost:9081/tables/profiles/kv/alice `
+  -H "X-Read-Consistency: session"
+# Response: X-Read-Sequence: 120
+curl.exe http://localhost:9081/tables/profiles/kv/alice `
+  -H "X-Read-Consistency: session" `
+  -H "X-Read-After-Sequence: 120"
+```
+
+**2. Consistent-prefix reads**
+
+Guarantee: if writes have an order, a session never sees a later write without
+also seeing the earlier writes that precede it. For example:
+
+```text
+W1: Alice creates a post
+W2: Bob comments "Nice post!"
+
+Allowed: Alice's post; Bob's comment
+Allowed: Alice's post only
+Forbidden: Bob's comment; Alice's post is missing
+```
+
+Think: **“I should not see effects before their causes.”** In this database,
+the same per-table sequence floor provides this ordering: if sequence `120` is
+visible, the Router will not send the next session read to a replica at `119`.
+The implementation does not claim a separate cross-table prefix protocol.
+
+`session`, `monotonic`, and `consistent-prefix` all require a replica at or
+beyond the client's sequence token. If no healthy replica has reached it, the
+Router uses the leader when the leader has reached it; otherwise the request
+fails instead of returning an older state.
+
+Use the `session` name—or either alias—when the client must not see this table
+go backward and must observe its committed writes in order. All aliases return
+the selected replica's sequence in `X-Read-Sequence`; clients should persist it
+and send it back as `X-Read-After-Sequence`.
+
 The trade-off is:
 
 | Choice | Route | Best for | Trade-off |
 |---|---|---|---|
 | `strong` | Current table leader | Read-your-own-writes, account settings, checkout state, immediate confirmation | Leader latency and capacity; fails if the leader cannot be discovered |
 | `eventual` | Any healthy replica | Public profiles, feeds, recommendations, counters, high-volume browsing | A recently committed write may not be visible yet |
-
+| `session` (aliases: `monotonic`, `consistent-prefix`) | Healthy replica at or beyond `X-Read-After-Sequence` | Per-table read-your-own-writes, no backward movement, and ordered effects | Requires sequence tokens; may wait, use the leader, or fail while replicas catch up |
 Reads carrying a `transactionId` always go to the relevant table leader, regardless
 of the header, so the transaction can see its own staged writes. Uncommitted writes
 are not replicated to followers or published to the change log before `COMMIT`.
 
 The Router SQL console exposes an `Eventual`/`Strong` selector and sends the selected
-value as `X-Read-Consistency` with each SQL request. Writes and transaction control
+value as `X-Read-Consistency` with each SQL request. Session consistency is available to
+HTTP clients through sequence-token headers. Writes and transaction control
 remain leader/coordinator routed. Direct database-node requests bypass Router
 load balancing and read the local replica.
 
