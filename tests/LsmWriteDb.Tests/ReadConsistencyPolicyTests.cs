@@ -31,6 +31,7 @@ public sealed class ReadConsistencyPolicyTests
         Assert.Equal("SEARCH", ReadConsistencyPolicy.ClassifySqlStatement("SEARCH articles MATCH 'database'"));
         Assert.Null(ReadConsistencyPolicy.ClassifySqlStatement("INSERT INTO users VALUES ('x')"));
     }
+
     [Fact]
     public void SessionConsistencyModesUseSequenceTokensWithoutForcingTheLeader()
     {
@@ -42,6 +43,20 @@ public sealed class ReadConsistencyPolicyTests
         Assert.True(ReadConsistencyPolicy.RequiresSessionSequence(monotonic));
         Assert.True(ReadConsistencyPolicy.RequiresSessionSequence(prefix));
         Assert.False(ReadConsistencyPolicy.ShouldRouteToLeader(true, false, monotonic));
+    }
+
+    [Fact]
+    public void BoundedStalenessUsesSequenceLagAndDoesNotForceLeader()
+    {
+        Assert.True(ReadConsistencyPolicy.TryParse("bounded-staleness", out var bounded));
+        Assert.True(ReadConsistencyPolicy.TryParse("bounded_staleness", out var alias));
+        Assert.True(ReadConsistencyPolicy.TryParse("bounded", out var shortAlias));
+        Assert.Equal(ReadConsistencyLevel.BoundedStaleness, bounded);
+        Assert.Equal(bounded, alias);
+        Assert.Equal(bounded, shortAlias);
+        Assert.False(ReadConsistencyPolicy.ShouldRouteToLeader(true, false, bounded));
+        Assert.Equal(975, ReadConsistencyPolicy.MinimumEligibleSequence(1000, 25));
+        Assert.Equal(0, ReadConsistencyPolicy.MinimumEligibleSequence(10, 25));
     }
 
     [Fact]

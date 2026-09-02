@@ -145,9 +145,8 @@ record is never split across blocks.
 
 - Optimize for frequent writes.
 - Support point reads and range reads.
-- Support four read consistency choices: load-balanced eventual reads by default,
-  sequence-aware session reads (also called monotonic or consistent-prefix), and
-  leader-routed strong reads when requested by the client.
+- Support four semantic read consistency levels: eventual, session (with monotonic and
+  consistent-prefix aliases), bounded staleness, and strong.
 - Route all transactional reads through the relevant table leader for read-your-writes,
   while non-transactional reads follow the selected consistency level.
 - Support multiple logical tables, each with its own WAL, memtable, SSTables,
@@ -228,7 +227,7 @@ Router URL rather than a database node URL.
 Each database node can run with a companion `Router` process. The Router is an
 HTTP reverse proxy that keeps pooled, long-lived connections to the database
 nodes. Writes and transactional reads route to table leaders; ordinary reads are
-load-balanced across healthy replicas unless the client requests session or strong consistency.
+load-balanced across healthy replicas unless the client requests session, bounded-staleness, or strong consistency.
 
 The Router:
 
@@ -254,7 +253,7 @@ dotnet run --project Router/Router.csproj --urls http://localhost:9080
 
 ### Read routing and consistency
 
-The Router supports four consistency choices for ordinary point and range reads. The
+The Router supports four semantic consistency levels for ordinary point and range reads: eventual, session, bounded staleness, and strong. `monotonic` and `consistent-prefix` are aliases for session. The
 default is eventual consistency: when `X-Read-Consistency` is absent or set to
 `eventual`, the Router load-balances the read across healthy replicas. A follower
 may be briefly behind while it catches up from the leader's committed change
@@ -264,7 +263,7 @@ Send `X-Read-Consistency: strong` when the read must go through the current tabl
 leader and return the leader's latest committed state. If the leader cannot be
 discovered, the strong read fails instead of falling back to a follower.
 
-### Choosing strong, eventual, or session reads
+### Choosing strong, eventual, bounded-staleness, or session reads
 
 Choose **strong consistency** when the caller must immediately observe the latest committed write. Strong reads are routed to the current table leader. This is the right choice for read-your-own-writes flows: for example, after a user updates their social-media profile, the following `GET /profile` should return the new profile immediately. Sending that read to a follower could briefly return the previous profile while replication catches up.
 
@@ -284,6 +283,31 @@ For example, after Alice changes her own profile, reading thousands of other pub
 curl.exe http://localhost:9081/tables/profiles/kv/bob `
   -H "X-Read-Consistency: eventual"
 ```
+
+### Bounded-staleness reads
+
+Bounded staleness sits between eventual and strong consistency. It allows the
+Router to use a healthy replica while guaranteeing that the replica is no more
+than a requested number of committed sequence positions behind the current
+leader. This is a deterministic freshness bound for read-heavy workloads.
+
+```powershell
+curl.exe http://localhost:9081/tables/profiles/kv/bob `
+  -H "X-Read-Consistency: bounded-staleness" `
+  -H "X-Max-Sequence-Lag: 25"
+```
+
+For example, if the leader is at sequence `10,000` and the maximum lag is `25`,
+only replicas at sequence `9,975` or higher are eligible. The response includes
+`X-Read-From` and `X-Read-Sequence` for observability. The Router rejects a
+missing or invalid lag bound and fails rather than returning a replica outside
+the requested bound. Use this for catalogs, public content, dashboards, or
+other reads where a small and explicit amount of staleness is acceptable.
+
+This implementation uses sequence lag rather than local wall-clock time, so it
+is deterministic even when machines have clock skew. See the [bounded-staleness
+design](./design/bounded-staleness.md) for the routing algorithm and the
+trade-offs of a future time-based bound.
 
 ### Session consistency: monotonic reads and consistent prefixes
 
@@ -358,13 +382,14 @@ The trade-off is:
 |---|---|---|---|
 | `strong` | Current table leader | Read-your-own-writes, account settings, checkout state, immediate confirmation | Leader latency and capacity; fails if the leader cannot be discovered |
 | `eventual` | Any healthy replica | Public profiles, feeds, recommendations, counters, high-volume browsing | A recently committed write may not be visible yet |
+| `bounded-staleness` | Healthy replica within `X-Max-Sequence-Lag` of the leader | Catalogs, public content, dashboards, and reads with an explicit freshness bound | Requires a lag bound; may fail while replicas catch up |
 | `session` (aliases: `monotonic`, `consistent-prefix`) | Healthy replica at or beyond `X-Read-After-Sequence` | Per-table read-your-own-writes, no backward movement, and ordered effects | Requires sequence tokens; may wait, use the leader, or fail while replicas catch up |
 
 Reads carrying a `transactionId` always go to the relevant table leader, regardless of the header, so the transaction can see its own staged writes. Uncommitted writes are not replicated to followers or published to the change log before `COMMIT`.
 
-The Router accepts four `X-Read-Consistency` values on HTTP and SQL requests:
+The Router accepts four semantic `X-Read-Consistency` levels on HTTP and SQL requests (six accepted names including aliases):
 `eventual` (the default), `session`, `monotonic` (an alias for `session`),
-`consistent-prefix` (also an alias for `session`), and `strong`. The SQL console
+`consistent-prefix` (also an alias for `session`), `bounded-staleness`, and `strong`. The SQL console
 currently exposes an `Eventual`/`Strong` selector; clients that need session
 semantics can send the session header directly with their SQL request. Writes and
 transaction control remain leader/coordinator routed. Direct database-node requests
@@ -372,8 +397,9 @@ bypass Router load balancing and read the local replica.
 
 Router-served reads include `X-Read-From` in the response headers so clients can see which database node returned the data.
 
-See [design/consistency-levels.md](./design/consistency-levels.md) for the routing
-contract and trade-offs.
+See [design/consistency-levels.md](./design/consistency-levels.md) for session and
+strong/eventual routing, and [design/bounded-staleness.md](./design/bounded-staleness.md)
+for bounded-staleness behavior.
 
 Clients should connect to the Router port rather than selecting a table leader
 manually. The Router forwards distributed transaction requests to a coordinator; the coordinator then contacts each affected table leader.

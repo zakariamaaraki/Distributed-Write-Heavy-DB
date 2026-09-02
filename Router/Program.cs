@@ -65,7 +65,7 @@ sealed class LeaderRouter
         var consistency = context.Request.Headers[ReadConsistencyHeader].ToString();
         if (!ReadConsistencyPolicy.TryParse(consistency, out var consistencyLevel))
         {
-            return Results.BadRequest(new { error = $"Unsupported {ReadConsistencyHeader} value. Use 'eventual', 'monotonic', 'consistent-prefix', or 'strong'." });
+            return Results.BadRequest(new { error = $"Unsupported {ReadConsistencyHeader} value. Use 'eventual', 'session', 'monotonic', 'consistent-prefix', 'bounded-staleness', or 'strong'." });
         }
 
         var isRead = IsReadRequest(context, statement);
@@ -76,11 +76,19 @@ sealed class LeaderRouter
             && context.Request.Headers.TryGetValue(ReadConsistencyPolicy.AfterSequenceHeader, out var afterSequence)
             && (!long.TryParse(afterSequence.ToString(), out requiredSequence) || requiredSequence < 0))
             return Results.BadRequest(new { error = $"{ReadConsistencyPolicy.AfterSequenceHeader} must be a non-negative integer." });
+        var maxSequenceLag = 0L;
+        if (consistencyLevel == ReadConsistencyLevel.BoundedStaleness
+            && (!context.Request.Headers.TryGetValue(ReadConsistencyPolicy.MaxSequenceLagHeader, out var maxLag)
+                || !long.TryParse(maxLag.ToString(), out maxSequenceLag)
+                || maxSequenceLag < 0))
+            return Results.BadRequest(new { error = $"{ReadConsistencyPolicy.MaxSequenceLagHeader} must be a non-negative integer when bounded staleness is selected." });
         var selectedSequence = 0L;
         var target = statement is "COMMIT" or "ROLLBACK"
             && requestTransactionId is Guid completionId
             && _transactionCoordinators.TryGetValue(completionId, out var coordinator)
                 ? coordinator
+                : isRead && consistencyLevel == ReadConsistencyLevel.BoundedStaleness
+                    ? await ResolveBoundedStalenessReplicaAsync(table, maxSequenceLag, cancellationToken, sequence => selectedSequence = sequence)
                 : isRead && ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel)
                     ? await ResolveSessionReplicaAsync(table, requiredSequence, cancellationToken, sequence => selectedSequence = sequence)
                     : isRead && !ReadConsistencyPolicy.ShouldRouteToLeader(isRead, transactionalRead, consistencyLevel)
@@ -119,7 +127,8 @@ sealed class LeaderRouter
         if (isRead)
         {
             context.Response.Headers["X-Read-From"] = target;
-            if (ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel))
+            if (ReadConsistencyPolicy.RequiresSessionSequence(consistencyLevel)
+                || consistencyLevel == ReadConsistencyLevel.BoundedStaleness)
             {
                 selectedSequence = Math.Max(selectedSequence, await GetNodeSequenceAsync(target, cancellationToken));
                 context.Response.Headers[ReadConsistencyPolicy.ReadSequenceHeader] = selectedSequence.ToString();
@@ -295,6 +304,21 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
             tableResults.Add(new { table, kind, states });
         }
         return new { generatedAt = DateTimeOffset.UtcNow, nodes = nodeResults, tables = tableResults };
+    }
+    private async Task<string> ResolveBoundedStalenessReplicaAsync(string table, long maxSequenceLag, CancellationToken cancellationToken, Action<long> selected)
+    {
+        var leader = await ResolveLeaderAsync(table, cancellationToken);
+        var leaderSequence = await GetNodeSequenceAsync(leader, cancellationToken);
+        var minimumSequence = ReadConsistencyPolicy.MinimumEligibleSequence(leaderSequence, maxSequenceLag);
+        var candidates = await GetHealthyReplicaCandidatesAsync(table, cancellationToken);
+        var observed = await Task.WhenAll(candidates.Select(async node => (Node: node, Sequence: await GetNodeSequenceAsync(node, cancellationToken))));
+        var eligible = observed.Where(item => item.Sequence >= minimumSequence).ToList();
+        if (eligible.Count == 0)
+            throw new InvalidOperationException($"No healthy replica is within {maxSequenceLag} sequence positions of the table leader.");
+
+        var item = eligible[(int)(uint)Interlocked.Increment(ref _replicaCursor) % eligible.Count];
+        selected(item.Sequence);
+        return item.Node;
     }
     private async Task<string> ResolveSessionReplicaAsync(string table, long requiredSequence, CancellationToken cancellationToken, Action<long> selected)
     {

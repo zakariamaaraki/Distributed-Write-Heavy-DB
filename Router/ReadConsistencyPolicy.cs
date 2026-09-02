@@ -7,6 +7,7 @@ public enum ReadConsistencyLevel
     Eventual,
     Monotonic,
     ConsistentPrefix,
+    BoundedStaleness,
     Strong
 }
 
@@ -15,6 +16,7 @@ public static class ReadConsistencyPolicy
     public const string HeaderName = "X-Read-Consistency";
     public const string AfterSequenceHeader = "X-Read-After-Sequence";
     public const string ReadSequenceHeader = "X-Read-Sequence";
+    public const string MaxSequenceLagHeader = "X-Max-Sequence-Lag";
 
     public static bool TryParse(string? value, out ReadConsistencyLevel level)
     {
@@ -26,6 +28,10 @@ public static class ReadConsistencyPolicy
             || string.Equals(value, "consistent_prefix", StringComparison.OrdinalIgnoreCase)
             || string.Equals(value, "session", StringComparison.OrdinalIgnoreCase))
         { level = ReadConsistencyLevel.ConsistentPrefix; return true; }
+        if (string.Equals(value, "bounded-staleness", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "bounded_staleness", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "bounded", StringComparison.OrdinalIgnoreCase))
+        { level = ReadConsistencyLevel.BoundedStaleness; return true; }
         if (string.Equals(value, "strong", StringComparison.OrdinalIgnoreCase))
         { level = ReadConsistencyLevel.Strong; return true; }
         level = default;
@@ -44,4 +50,7 @@ public static class ReadConsistencyPolicy
 
     public static bool RequiresSessionSequence(ReadConsistencyLevel level)
         => level is ReadConsistencyLevel.Monotonic or ReadConsistencyLevel.ConsistentPrefix;
+
+    public static long MinimumEligibleSequence(long leaderSequence, long maxSequenceLag)
+        => Math.Max(0, leaderSequence - maxSequenceLag);
 }
