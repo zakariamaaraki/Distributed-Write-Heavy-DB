@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 const string MonitoringPage = """
-<!doctype html><html><head><meta charset="utf-8"><title>LSM Cluster Monitoring</title><style>body{font-family:system-ui;margin:24px;background:#f5f7fb;color:#172033}.muted{color:#65728a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:white;border:1px solid #dbe2ee;border-radius:10px;padding:14px;margin:12px 0}.ok{color:#16834b}.down{color:#c33}.leader{background:#e9f8ef}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid #e5eaf2;text-align:left}th{background:#edf2fa}</style></head><body><h1>LSM Cluster Monitoring</h1><div class="muted">Router-local view · refreshes every 3 seconds · <span id="time">loading...</span></div><h2>Nodes</h2><div id="nodes" class="grid"></div><h2>Table ownership</h2><div id="tables"></div><script>async function refresh(){try{const d=await fetch('/monitoring/api/status').then(r=>r.json());document.getElementById('time').textContent=new Date(d.generatedAt).toLocaleString();document.getElementById('nodes').innerHTML=d.nodes.map(n=>`<div class="card"><b>${n.id}</b><div>${n.url}</div><p class="${n.reachable?'ok':'down'}">${n.reachable?'● reachable':'● unavailable'}</p><p>read: active ${n.activeReads??'-'} / ${n.maxConcurrentReads??'-'} · queued ${n.queuedReads??'-'}</p><p>write: active ${n.activeWrites??'-'} / ${n.maxConcurrentWrites??'-'} · queued ${n.queuedWrites??'-'}</p><p>total storage: ${n.totalStorageKb==null?'-':n.totalStorageKb.toFixed(2)} KB</p></div>`).join('');document.getElementById('tables').innerHTML=d.tables.length?d.tables.map(t=>`<div class="card"><h3>${t.table}</h3><table><tr><th>Kind</th><th>Node</th><th>Size (KB)</th><th>Role</th><th>Term</th><th>Leader</th></tr>${t.states.map(s=>`<tr class="${String(s.role).toLowerCase().includes('leader')?'leader':''}"><td>${t.kind}</td><td>${s.node}</td><td>${s.sizeKb==null?'-':s.sizeKb.toFixed(2)}</td><td>${s.role??'Unavailable'}</td><td>${s.term??'-'}</td><td>${s.leader??'-'}</td></tr>`).join('')}</table></div>`).join(''):'<p class="muted">No tables discovered.</p>'}catch(e){document.getElementById('time').textContent='monitoring unavailable: '+e}}refresh();setInterval(refresh,3000);</script></body></html>
+<!doctype html><html><head><meta charset="utf-8"><title>LSM Cluster Monitoring</title><style>body{font-family:system-ui;margin:24px;background:#f5f7fb;color:#172033}.muted{color:#65728a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:white;border:1px solid #dbe2ee;border-radius:10px;padding:14px;margin:12px 0}.ok{color:#16834b}.down{color:#c33}.leader{background:#e9f8ef}.caught-up{color:#16834b}.behind{color:#a15c00}.unknown{color:#65728a}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid #e5eaf2;text-align:left}th{background:#edf2fa}</style></head><body><h1>LSM Cluster Monitoring</h1><div class="muted">Router-local view · refreshes every 3 seconds · <span id="time">loading...</span></div><h2>Nodes</h2><div id="nodes" class="grid"></div><h2>Table ownership and replica freshness</h2><div id="tables"></div><script>async function refresh(){try{const d=await fetch('/monitoring/api/status').then(r=>r.json());document.getElementById('time').textContent=new Date(d.generatedAt).toLocaleString();document.getElementById('nodes').innerHTML=d.nodes.map(n=>`<div class="card"><b>${n.id}</b><div>${n.url}</div><p class="${n.reachable?'ok':'down'}">${n.reachable?'● reachable':'● unavailable'}</p><p>read: active ${n.activeReads??'-'} / ${n.maxConcurrentReads??'-'} · queued ${n.queuedReads??'-'}</p><p>write: active ${n.activeWrites??'-'} / ${n.maxConcurrentWrites??'-'} · queued ${n.queuedWrites??'-'}</p><p>total storage: ${n.totalStorageKb==null?'-':n.totalStorageKb.toFixed(2)} KB</p></div>`).join('');document.getElementById('tables').innerHTML=d.tables.length?d.tables.map(t=>`<div class="card"><h3>${t.table}</h3><table><tr><th>Kind</th><th>Node</th><th>Role</th><th>Applied sequence</th><th>Leader sequence</th><th>Lag</th><th>Size (KB)</th><th>Term</th><th>Leader</th></tr>${t.states.map(s=>`<tr class="${String(s.role).toLowerCase().includes('leader')?'leader':''}"><td>${t.kind}</td><td>${s.node}</td><td>${s.role??'Unavailable'}</td><td>${s.appliedSequence??'—'}</td><td>${s.leaderSequence??'—'}</td><td class="${s.lagStatus??'unknown'}">${s.sequenceLag==null?'—':s.sequenceLag+' ('+s.lagStatus+')'}</td><td>${s.sizeKb==null?'-':s.sizeKb.toFixed(2)}</td><td>${s.term??'-'}</td><td>${s.leader??'-'}</td></tr>`).join('')}</table></div>`).join(''):'<p class="muted">No tables discovered.</p>'}catch(e){document.getElementById('time').textContent='monitoring unavailable: '+e}}refresh();setInterval(refresh,3000);</script></body></html>
 """;
 
 
@@ -294,11 +294,39 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
                 try
                 {
                     var state = await GetMonitoringJsonAsync<MonitoringTableState>(node.Url + "/raft/tables/" + Uri.EscapeDataString(table) + "/state", cancellationToken);
-                    states.Add(new { node = node.Id, role = state?.Role, term = state?.CurrentTerm, leader = state?.LeaderId, leaderUrl = state?.LeaderUrl, sizeKb = GetSizeKb(tableSizes, node.Id, table) });
+                    MonitoringTableState? leaderState = null;
+                    if (state?.LeaderUrl is string leaderUrl)
+                    {
+                        try
+                        {
+                            leaderState = await GetMonitoringJsonAsync<MonitoringTableState>(leaderUrl + "/raft/tables/" + Uri.EscapeDataString(table) + "/state", cancellationToken);
+                        }
+                        catch (Exception leaderException) when (leaderException is HttpRequestException or TaskCanceledException)
+                        {
+                            // Keep the local state visible; lag is unknown until the leader can be observed.
+                        }
+                    }
+                    var leaderSequence = string.Equals(state?.Role?.ToString(), "Leader", StringComparison.OrdinalIgnoreCase)
+                        ? state!.LastAppliedChangeSequence
+                        : leaderState?.LastAppliedChangeSequence;
+                    var sequenceLag = ReplicaLagCalculator.Calculate(leaderSequence, state?.LastAppliedChangeSequence);
+                    states.Add(new
+                    {
+                        node = node.Id,
+                        role = state?.Role,
+                        term = state?.CurrentTerm,
+                        leader = state?.LeaderId,
+                        leaderUrl = state?.LeaderUrl,
+                        sizeKb = GetSizeKb(tableSizes, node.Id, table),
+                        appliedSequence = state?.LastAppliedChangeSequence,
+                        leaderSequence,
+                        sequenceLag,
+                        lagStatus = ReplicaLagCalculator.Status(sequenceLag)
+                    });
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    states.Add(new { node = node.Id, role = "Unavailable", term = (long?)null, leader = (string?)null, leaderUrl = (string?)null, sizeKb = (double?)null, error = ex.Message });
+                    states.Add(new { node = node.Id, role = "Unavailable", term = (long?)null, leader = (string?)null, leaderUrl = (string?)null, sizeKb = (double?)null, appliedSequence = (long?)null, leaderSequence = (long?)null, sequenceLag = (long?)null, lagStatus = "unknown", error = ex.Message });
                 }
             }
             tableResults.Add(new { table, kind, states });
@@ -548,5 +576,5 @@ public async Task<object> GetMonitoringAsync(CancellationToken cancellationToken
     private sealed record NodeStats(IReadOnlyList<NodeTableStat> Tables, long LastSequence);
     private sealed record NodeTableStat(string Table, long DiskSizeBytes);
     private sealed record RaftStatus(string? LeaderUrl, JsonElement Role);
-    private sealed record MonitoringTableState(string? LeaderUrl, string? LeaderId, object? Role, long CurrentTerm);
+    private sealed record MonitoringTableState(string? LeaderUrl, string? LeaderId, object? Role, long CurrentTerm, long LastAppliedChangeSequence);
 }
