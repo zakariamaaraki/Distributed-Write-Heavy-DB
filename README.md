@@ -13,6 +13,23 @@ The central design rule is simple:
 
 > Keep the source table authoritative, make writes durable through the same WAL and SSTable pipeline, and build higher-level capabilities above that foundation.
 
+## Why relational systems are harder to scale horizontally
+
+Relational databases can scale, but they often scale less simply when horizontal distribution must preserve rich relational guarantees. The difficulty is not the existence of a schema alone; it is the coordination required by the operations the relational model makes possible. Horizontal scaling becomes harder when a workload needs:
+
+- joins across partitions;
+- foreign-key and uniqueness constraints across nodes;
+- secondary indexes that span partitions;
+- multi-row or multi-table transactions;
+- serializable consistency and a single globally ordered view of data;
+- write hotspots caused by popular rows or shared counters.
+
+This project treats those tradeoffs as an architectural problem rather than assuming that SQL and scale are incompatible. We added one Raft leader per table so write ownership and ordering are local to a table, while different tables can have different leaders and scale independently. Cross-table writes use coordinator-driven two-phase commit only when coordination is actually required.
+
+We also support multiple read consistency levels—eventual, session, bounded staleness, and strong—so every read does not pay the cost of leader routing when the use case does not need it. Transaction isolation is separately selectable: read committed for short independent operations, repeatable read for stable repeated reads, and serializable when serializable peers must not overlap.
+
+The result is a layered design: the relational schema and SQL behavior remain available, while table-local leadership, selective consistency, per-table LSM storage, derived indexes, and explicit distributed coordination let deployments choose where to spend coordination and where to favor throughput or availability.
+
 ## What this database gives you
 
 | Need | Capability | Storage model |
@@ -69,12 +86,12 @@ jump to the corresponding section below.
 3. [Per-table leadership and Router](#per-table-leadership)
 4. [Transactions and consistency](#distributed-transactions)
 5. [Transaction isolation levels](#transaction-isolation-levels)
-5. [Data model and SQL](#data-model)
-6. [Indexes and full-text search](#b-trees-and-json-value-indexes)
-7. [HTTP, Python, and TCP interfaces](#http-api)
-8. [Storage internals](#components)
-9. [Read/write paths and storage layout](#write-path)
-10. [Testing and deployment](#testing)
+6. [Data model and SQL](#data-model)
+7. [Indexes and full-text search](#b-trees-and-json-value-indexes)
+8. [HTTP, Python, and TCP interfaces](#http-api)
+9. [Storage internals](#components)
+10. [Read/write paths and storage layout](#write-path)
+11. [Testing and deployment](#testing)
 
 ## The one-minute mental model
 
