@@ -1454,17 +1454,72 @@ uncommitted changes from becoming durable.
 - Consistency: committed records still go through the same key/value validation,
   table validation, sequence numbering, tombstone handling, WAL, memtable,
   flush, and compaction rules as direct writes.
-### Isolation and transaction visibility
+## Transaction isolation levels
 
-Transactions support selectable isolation levels. `BEGIN` defaults to read committed; use `BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED`, `REPEATABLE READ`, or `SERIALIZABLE` to choose explicitly.
+Transactions default to read committed and can select a level at `BEGIN`:
 
-- **Read committed** keeps uncommitted writes private and reads the latest committed state for each statement. Repeated reads may observe a later commit.
-- **Repeatable read** caches the first point/range result for the transaction, preventing changes for the same read shape while preserving read-your-writes. It is not MVCC snapshot isolation and different ranges may still observe phantoms.
-- **Serializable** uses a strict, manager-wide two-phase-locking gate held from `BEGIN` through `COMMIT` or `ROLLBACK`. It serializes serializable transactions but blocks them and does not cover weaker transactions, other processes, replicas, or distributed participants.
+```sql
+BEGIN;
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+```
 
-Snapshot isolation/MVCC is not supported. Linearizability is a separate real-time operation guarantee; transaction isolation does not make follower reads linearizable. See [Transaction isolation levels](#transaction-isolation-levels) and [design/transaction-isolation.md](./design/transaction-isolation.md).
+- **Read committed**: each statement reads committed data as of that statement, with read-your-own-writes. It prevents dirty reads, but later reads may observe another transaction's commit.
+- **Repeatable read**: the first point/range result is cached for the transaction, so repeating the same read is stable while staged writes remain visible. It is not MVCC snapshot isolation; different ranges can still observe phantoms.
+- **Serializable**: serializable transactions use a manager-wide strict two-phase-locking gate held from `BEGIN` to `COMMIT`/`ROLLBACK`. This prevents interleaving among serializable peers, but blocks them and does not cover weaker transactions, other processes, replicas, or distributed participants.
 
+2PL has a growing phase, where locks are acquired, and a shrinking phase after the transaction closes, where locks are released. LsmWriteDb uses one coarse lock rather than key/range locks to keep this implementation deadlock-free.
+
+Snapshot isolation and MVCC are **not supported**. Repeatable read is a read cache, not a historical database snapshot. Linearizability is separate from transaction isolation: it requires each operation to appear atomic in real time. Use strong/leader-routed reads when the latest leader state is required.
+
+See [design/transaction-isolation.md](./design/transaction-isolation.md) for guarantees, failure modes, and implementation details.
+
+### Concurrent request examples: on-call doctor scheduling
+
+Assume `doctor:ada` is the only on-call doctor and `slot:10:00` is an open appointment. Request A is the scheduling service and Request B is an on-call dashboard updating availability.
+
+**Read committed**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+B: UPDATE doctors SET value = '{"on_call":false}' WHERE key = 'doctor:ada'
+B: COMMIT
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=false
+A: COMMIT
+```
+
+The second read sees B's committed change because each statement reads fresh committed state. This is useful when every decision is short-lived, but A can make a decision from the first result and act on a different state later. It does not prevent non-repeatable reads, phantoms, or a doctor being double-booked by a separate concurrent workflow.
+
+**Repeatable read**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+B: UPDATE doctors SET value = '{"on_call":false}' WHERE key = 'doctor:ada'
+B: COMMIT
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+A: COMMIT
+```
+
+A reuses its cached point read, so its two reads agree. The limit is that this is not a full database snapshot: A can still see B's commit through an unread key or a different range query. The cache also does not reserve the doctor; another transaction can update or book the same record, and conflicting writes remain last-commit-wins.
+
+**Serializable**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE
+B: BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE -> waits
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+A: INSERT INTO appointments (key, value) VALUES ('slot:10:00', '{"doctor":"ada"}')
+A: COMMIT
+B: BEGIN completes
+B: SELECT * FROM doctors WHERE key = 'doctor:ada' -> current committed state
+```
+
+Serializable peers do not overlap, so B cannot make a scheduling decision while A is running. The limit is scope: a `READ COMMITTED` or `REPEATABLE READ` transaction can still run concurrently, and the gate is local to one process/transaction manager. It does not coordinate other nodes, replicas, or distributed participants. Long serializable transactions also block other serializable transactions.
 ### Transaction buffer
+
 
 Each transaction has a small private buffer. It does not copy the entire memtable. Internally, the buffer is a .NET `Dictionary<TransactionWriteKey, TransactionWrite>` keyed by table and key. A second write to the same key replaces the first staged write.
 
@@ -1490,7 +1545,8 @@ the transaction buffer contains only `A = 10` and `D = 4`. It does not contain c
 - **Snapshot isolation:** a transaction reads from one consistent snapshot of committed data. Later commits by other transactions are not visible to it, so repeated reads see the same versions. The tradeoff is extra version storage and cleanup work, plus possible write conflicts or long-lived snapshots that retain old data and consume memory or disk space.
 - **Serializable isolation:** concurrent transactions produce the same result as if they had executed one at a time, usually through locking, validation, or serialization. The tradeoff is lower concurrency: transactions may block, deadlock, or be aborted and retried, and conflict tracking adds CPU and memory overhead.
 
-Snapshot isolation is not implemented, and conflicting writes still use last-commit-wins semantics.- Durability: commit appends each table's committed batch to that table's WAL
+Snapshot isolation is not implemented, and conflicting writes still use last-commit-wins semantics.
+- Durability: commit appends each table's committed batch to that table's WAL
   before applying it to the memtable. After a restart, complete committed
   batches are replayed. Partial trailing batch records are ignored, so
   incomplete commits do not become durable.
@@ -1810,24 +1866,3 @@ The compose cluster exposes:
 Each container advertises its internal Docker DNS URL, such as
 `http://node-a:8080`, so Raft vote and heartbeat RPCs stay inside the compose
 network. Use `/raft/state` on each host port to see which node is leader.
-
-## Transaction isolation levels
-
-Transactions default to read committed and can select a stronger level at `BEGIN`:
-
-```sql
-BEGIN;
-BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
-BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-```
-
-- **Read committed**: each statement reads committed data as of that statement, with read-your-own-writes. It prevents dirty reads, but a second read can change after another transaction commits. Use it for short independent operations; it does not prevent non-repeatable reads or phantoms.
-- **Repeatable read**: the first point/range result is cached for the transaction, so repeating the same read is stable while staged writes remain visible. It prevents dirty and repeated-read changes for the same read shape, but it is not MVCC snapshot isolation and different ranges can still observe phantoms.
-- **Serializable**: serializable transactions use a manager-wide strict two-phase-locking gate held from `BEGIN` to `COMMIT`/`ROLLBACK`. This prevents interleaving among serializable transactions, at the cost of blocking and lower concurrency. All conflicting transactions must opt in; the gate is local to one process/transaction manager and does not cover weaker transactions, other processes, replicas, or distributed participants.
-
-2PL has a growing phase, where locks are acquired, and a shrinking phase after the transaction closes, where locks are released. LsmWriteDb uses one coarse lock rather than key/range locks to keep the implementation deadlock-free.
-
-Snapshot isolation and MVCC are **not supported**. Repeatable read is a read cache, not a historical database snapshot. Linearizability is also separate from transaction isolation: it requires each operation to appear atomic in real time. Use strong/leader-routed reads when the latest leader state is required; transaction isolation alone does not make follower reads linearizable.
-
-See [design/transaction-isolation.md](./design/transaction-isolation.md) for guarantees, failure modes, and implementation details.

@@ -50,3 +50,48 @@ Linearizability is a real-time ordering guarantee: each operation appears to tak
 | Read committed | No | Possible | Possible | Fresh committed read per statement |
 | Repeatable read | No | Prevented for repeated cached point/range reads | Possible for different ranges | Transaction read cache |
 | Serializable | No | Prevented for serializable peers | Prevented by serialization of serializable peers | Strict coarse-grained 2PL |
+
+
+### Concurrent request examples: on-call doctor scheduling
+
+Assume `doctor:ada` is the only on-call doctor and `slot:10:00` is an open appointment. Request A is the scheduling service and Request B is an on-call dashboard updating availability.
+
+**Read committed**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+B: UPDATE doctors SET value = '{"on_call":false}' WHERE key = 'doctor:ada'
+B: COMMIT
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=false
+A: COMMIT
+```
+
+The second read sees B's committed change because each statement reads fresh committed state. This is useful when every decision is short-lived, but A can make a decision from the first result and act on a different state later. It does not prevent non-repeatable reads, phantoms, or a doctor being double-booked by a separate concurrent workflow.
+
+**Repeatable read**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+B: UPDATE doctors SET value = '{"on_call":false}' WHERE key = 'doctor:ada'
+B: COMMIT
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+A: COMMIT
+```
+
+A reuses its cached point read, so its two reads agree. The limit is that this is not a full database snapshot: A can still see B's commit through an unread key or a different range query. The cache also does not reserve the doctor; another transaction can update or book the same record, and conflicting writes remain last-commit-wins.
+
+**Serializable**
+
+```text
+A: BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE
+B: BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE -> waits
+A: SELECT * FROM doctors WHERE key = 'doctor:ada' -> on_call=true
+A: INSERT INTO appointments (key, value) VALUES ('slot:10:00', '{"doctor":"ada"}')
+A: COMMIT
+B: BEGIN completes
+B: SELECT * FROM doctors WHERE key = 'doctor:ada' -> current committed state
+```
+
+Serializable peers do not overlap, so B cannot make a scheduling decision while A is running. The limit is scope: a `READ COMMITTED` or `REPEATABLE READ` transaction can still run concurrently, and the gate is local to one process/transaction manager. It does not coordinate other nodes, replicas, or distributed participants. Long serializable transactions also block other serializable transactions.
