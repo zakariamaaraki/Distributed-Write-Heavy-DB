@@ -79,7 +79,7 @@ public sealed class SqlEngine
 
         return statement switch
         {
-            SqlBeginStatement => Begin(),
+            SqlBeginStatement begin => Begin(begin.IsolationLevel),
             SqlCommitStatement => await CommitAsync(request.TransactionId),
             SqlRollbackStatement => Rollback(request.TransactionId),
             SqlShowTablesStatement => await ShowTablesAsync(),
@@ -133,9 +133,9 @@ public sealed class SqlEngine
         return SqlExecutionResult.WithRows("SHOW TABLES", rows);
     }
 
-    private SqlExecutionResult Begin()
+    private SqlExecutionResult Begin(IsolationLevel isolationLevel)
     {
-        var transaction = _transactions.Begin();
+        var transaction = _transactions.Begin(isolationLevel);
         return SqlExecutionResult.Acknowledged(
             "BEGIN",
             rowsAffected: 0,

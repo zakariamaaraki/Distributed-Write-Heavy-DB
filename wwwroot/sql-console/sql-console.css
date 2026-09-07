@@ -468,3 +468,10 @@ pre {
     flex: 1 1 auto;
   }
 }
+
+.field-help {
+  margin: 7px 0 0;
+  color: var(--muted, #8b96aa);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}

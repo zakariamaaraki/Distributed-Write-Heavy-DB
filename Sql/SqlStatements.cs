@@ -1,3 +1,4 @@
+using LsmWriteDb.Transactions;
 using Microsoft.AspNetCore.Http;
 using LsmWriteDb.Storage;
 
@@ -32,7 +33,7 @@ public sealed record SqlExecutionResult(
 
 internal abstract record SqlStatement(string StatementType);
 
-internal sealed record SqlBeginStatement() : SqlStatement("BEGIN");
+internal sealed record SqlBeginStatement(IsolationLevel IsolationLevel = IsolationLevel.ReadCommitted) : SqlStatement("BEGIN");
 
 internal sealed record SqlCommitStatement() : SqlStatement("COMMIT");
 

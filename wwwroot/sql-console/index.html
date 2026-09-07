@@ -27,6 +27,16 @@
       </section>
 
       <section class="sidebar-section">
+        <label class="label" for="transactionIsolation">Transaction isolation</label>
+        <select class="consistency-select" id="transactionIsolation" title="Isolation level used by the Begin button">
+          <option value="READ COMMITTED" selected>Read committed</option>
+          <option value="REPEATABLE READ">Repeatable read</option>
+          <option value="SERIALIZABLE">Serializable</option>
+        </select>
+        <p class="field-help">Controls the SQL emitted by Begin.</p>
+      </section>
+
+      <section class="sidebar-section">
         <label class="label" for="readConsistency">Read consistency</label>
         <select class="consistency-select" id="readConsistency">
           <option value="eventual" selected>Eventual (load balanced)</option>
@@ -60,7 +70,7 @@
           <button class="snippet" data-query="INSERT INTO kv (key, value) VALUES ('alpha', '{&quot;text&quot;:&quot;one&quot;}')">INSERT INTO kv (key, value) VALUES ('alpha', '{"text":"one"}')</button>
           <button class="snippet" data-query="UPDATE kv SET value = '{&quot;text&quot;:&quot;updated&quot;}' WHERE key = 'alpha'">UPDATE kv SET value = '{"text":"updated"}' WHERE key = 'alpha'</button>
           <button class="snippet" data-query="DELETE FROM kv WHERE key = 'alpha'">DELETE FROM kv WHERE key = 'alpha'</button>
-          <button class="snippet" data-query="BEGIN TRANSACTION">BEGIN TRANSACTION</button>
+          <button class="snippet" data-query="BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED">BEGIN READ COMMITTED</button>
           <button class="snippet" data-query="COMMIT TRANSACTION">COMMIT TRANSACTION</button>
           <button class="snippet" data-query="ROLLBACK TRANSACTION">ROLLBACK TRANSACTION</button>
         </div>

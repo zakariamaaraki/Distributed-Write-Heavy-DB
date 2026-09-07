@@ -2,6 +2,7 @@ const editor = document.getElementById('queryEditor');
 const transactionInput = document.getElementById('transactionId');
 const transactionStatus = document.getElementById('transactionStatus');
 const readConsistency = document.getElementById('readConsistency');
+const transactionIsolation = document.getElementById('transactionIsolation');
 const readSource = document.getElementById('readSource');
 const serviceStatus = document.getElementById('serviceStatus');
 const resultBody = document.getElementById('resultBody');
@@ -11,6 +12,7 @@ const elapsedTime = document.getElementById('elapsedTime');
 const historyEl = document.getElementById('history');
 const toast = document.getElementById('toast');
 const historyKey = 'lsmwrite-sql-console-history';
+const isolationKey = 'lsmwrite-sql-console-isolation';
 
 function activeTransactionId() {
   const value = transactionInput.value.trim();
@@ -190,7 +192,7 @@ function compactSql(value) {
 }
 
 document.getElementById('runQuery').addEventListener('click', () => execute());
-document.getElementById('beginTransaction').addEventListener('click', () => execute('BEGIN'));
+document.getElementById('beginTransaction').addEventListener('click', () => execute(`BEGIN TRANSACTION ISOLATION LEVEL ${transactionIsolation.value}`));
 document.getElementById('commitTransaction').addEventListener('click', () => execute('COMMIT'));
 document.getElementById('rollbackTransaction').addEventListener('click', () => execute('ROLLBACK'));
 document.getElementById('clearTransaction').addEventListener('click', () => setTransactionId(''));
@@ -228,6 +230,8 @@ editor.addEventListener('keydown', event => {
 });
 
 transactionInput.addEventListener('input', renderTransactionStatus);
+transactionIsolation.value = localStorage.getItem(isolationKey) || 'READ COMMITTED';
+transactionIsolation.addEventListener('change', () => localStorage.setItem(isolationKey, transactionIsolation.value));
 
 renderTransactionStatus();
 renderHistory();

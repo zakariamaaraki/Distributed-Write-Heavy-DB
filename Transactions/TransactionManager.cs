@@ -7,7 +7,8 @@ public sealed record TransactionInfo(
     Guid TransactionId,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    int OperationCount);
+    int OperationCount,
+    IsolationLevel IsolationLevel);
 
 public sealed record TransactionCommit(Guid TransactionId, int OperationCount);
 
@@ -20,6 +21,7 @@ public sealed class TransactionManager
     private readonly DatabaseEngine? _database;
     private readonly LsmStore? _singleStore;
     private readonly ConcurrentDictionary<Guid, TransactionBuffer> _transactions = new();
+    private readonly SemaphoreSlim _serializableGate = new(1, 1);
 
     public TransactionManager(DatabaseEngine database)
     {
@@ -31,9 +33,11 @@ public sealed class TransactionManager
         _singleStore = store;
     }
 
-    public TransactionInfo Begin()
+    public TransactionInfo Begin(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
-        var transaction = TransactionBuffer.Create();
+        if (isolationLevel == IsolationLevel.Serializable)
+            _serializableGate.Wait();
+        var transaction = TransactionBuffer.Create(isolationLevel);
         if (!_transactions.TryAdd(transaction.Id, transaction))
         {
             throw new InvalidOperationException("Could not create transaction.");
@@ -107,7 +111,7 @@ public sealed class TransactionManager
                 return new TransactionValueRead(FoundTransaction: false, Row: null);
             }
 
-            return new TransactionValueRead(FoundTransaction: true, Row: await ReadCommittedAsync(normalizedTable, key));
+            return new TransactionValueRead(FoundTransaction: true, Row: await ReadForIsolationAsync(buffer, normalizedTable, key));
         }
 
         return new TransactionValueRead(FoundTransaction: true, Row: staged.ToRowOrNull());
@@ -134,7 +138,7 @@ public sealed class TransactionManager
         var boundedLimit = Math.Clamp(limit, 1, 1_000);
         var rowsByKey = new SortedDictionary<string, KeyValueRow>(StringComparer.Ordinal);
 
-        foreach (var row in await ReadCommittedRangeAsync(normalizedTable, start, end, 1_000))
+        foreach (var row in await ReadRangeForIsolationAsync(buffer, normalizedTable, start, end, 1_000))
         {
             rowsByKey[row.Key] = row;
         }
@@ -188,6 +192,7 @@ public sealed class TransactionManager
         await ApplyBatchAsync(operations);
 
         _transactions.TryRemove(transactionId, out _);
+        buffer.ReleaseIsolationLock(_serializableGate);
         return new TransactionCommit(transactionId, operations.Count);
     }
 
@@ -208,6 +213,7 @@ public sealed class TransactionManager
         }
 
         _transactions.TryRemove(transactionId, out _);
+        buffer.ReleaseIsolationLock(_serializableGate);
         return true;
     }
 
@@ -232,6 +238,29 @@ public sealed class TransactionManager
         {
             throw new ArgumentException("Key is required.", nameof(key));
         }
+    }
+
+    private async Task<KeyValueRow?> ReadForIsolationAsync(TransactionBuffer buffer, string table, string key)
+    {
+        if (buffer.IsolationLevel == IsolationLevel.ReadCommitted)
+            return await ReadCommittedAsync(table, key);
+        if (buffer.TryGetCached(table, key, out var cached))
+            return cached;
+        var row = await ReadCommittedAsync(table, key);
+        buffer.Cache(table, key, row);
+        return row;
+    }
+
+    private async Task<IReadOnlyList<KeyValueRow>> ReadRangeForIsolationAsync(TransactionBuffer buffer, string table, string? start, string? end, int limit)
+    {
+        if (buffer.IsolationLevel == IsolationLevel.ReadCommitted)
+            return await ReadCommittedRangeAsync(table, start, end, limit);
+        var cacheKey = new RangeReadKey(table, start, end, limit);
+        if (buffer.TryGetCachedRange(cacheKey, out var cached))
+            return cached;
+        var rows = await ReadCommittedRangeAsync(table, start, end, limit);
+        buffer.CacheRange(cacheKey, rows);
+        return rows;
     }
 
     private async Task<KeyValueRow?> ReadCommittedAsync(string table, string key)
@@ -284,17 +313,22 @@ internal sealed class TransactionBuffer
 {
     private readonly object _mutex = new();
     private readonly Dictionary<TransactionWriteKey, TransactionWrite> _writes = new();
+    private readonly Dictionary<TransactionWriteKey, KeyValueRow?> _readCache = new();
+    private readonly Dictionary<RangeReadKey, IReadOnlyList<KeyValueRow>> _rangeCache = new();
     private bool _closed;
     private DateTimeOffset _updatedAt;
 
-    private TransactionBuffer(Guid id, DateTimeOffset createdAt)
+    private TransactionBuffer(Guid id, DateTimeOffset createdAt, IsolationLevel isolationLevel)
     {
         Id = id;
         CreatedAt = createdAt;
         _updatedAt = createdAt;
+        IsolationLevel = isolationLevel;
     }
 
     public Guid Id { get; }
+
+    public IsolationLevel IsolationLevel { get; }
 
     public DateTimeOffset CreatedAt { get; }
 
@@ -309,14 +343,14 @@ internal sealed class TransactionBuffer
         }
     }
 
-    public static TransactionBuffer Create()
+    public static TransactionBuffer Create(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
-        return new TransactionBuffer(Guid.NewGuid(), DateTimeOffset.UtcNow);
+        return new TransactionBuffer(Guid.NewGuid(), DateTimeOffset.UtcNow, isolationLevel);
     }
 
     public static TransactionBuffer Create(Guid id)
     {
-        return new TransactionBuffer(id, DateTimeOffset.UtcNow);
+        return new TransactionBuffer(id, DateTimeOffset.UtcNow, IsolationLevel.ReadCommitted);
     }
     public TransactionInfo ToInfo()
     {
@@ -355,6 +389,31 @@ internal sealed class TransactionBuffer
 
             return _writes.TryGetValue(new TransactionWriteKey(table, key), out write!);
         }
+    }
+
+    public bool TryGetCached(string table, string key, out KeyValueRow? row)
+    {
+        lock (_mutex) return _readCache.TryGetValue(new TransactionWriteKey(table, key), out row);
+    }
+
+    public void Cache(string table, string key, KeyValueRow? row)
+    {
+        lock (_mutex) _readCache[new TransactionWriteKey(table, key)] = row;
+    }
+
+    public bool TryGetCachedRange(RangeReadKey key, out IReadOnlyList<KeyValueRow> rows)
+    {
+        lock (_mutex) return _rangeCache.TryGetValue(key, out rows!);
+    }
+
+    public void CacheRange(RangeReadKey key, IReadOnlyList<KeyValueRow> rows)
+    {
+        lock (_mutex) _rangeCache[key] = rows.ToList();
+    }
+
+    public void ReleaseIsolationLock(SemaphoreSlim gate)
+    {
+        if (IsolationLevel == IsolationLevel.Serializable) gate.Release();
     }
 
     public IReadOnlyList<string> Tables()
@@ -411,11 +470,12 @@ internal sealed class TransactionBuffer
 
     private TransactionInfo ToInfoCore()
     {
-        return new TransactionInfo(Id, CreatedAt, _updatedAt, _writes.Count);
+        return new TransactionInfo(Id, CreatedAt, _updatedAt, _writes.Count, IsolationLevel);
     }
 }
 
 internal sealed record TransactionWriteKey(string Table, string Key);
+internal sealed record RangeReadKey(string Table, string? Start, string? End, int Limit);
 
 internal sealed record TransactionWrite(string Table, string Key, string? Value, bool IsDeleted)
 {

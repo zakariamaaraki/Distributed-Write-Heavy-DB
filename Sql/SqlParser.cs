@@ -1,3 +1,4 @@
+using LsmWriteDb.Transactions;
 using System.Text.RegularExpressions;
 using LsmWriteDb.Storage;
 
@@ -36,7 +37,16 @@ internal sealed class SqlParser
         if (MatchKeyword("BEGIN"))
         {
             MatchKeyword("TRANSACTION");
-            return new SqlBeginStatement();
+            var isolation = IsolationLevel.ReadCommitted;
+            if (MatchKeyword("ISOLATION"))
+            {
+                ExpectKeyword("LEVEL");
+                var first = ExpectIdentifier().ToUpperInvariant();
+                var level = first;
+                if (first is "READ" or "REPEATABLE") level += " " + ExpectIdentifier().ToUpperInvariant();
+                isolation = IsolationLevelParser.Parse(level);
+            }
+            return new SqlBeginStatement(isolation);
         }
 
         if (MatchKeyword("COMMIT"))
