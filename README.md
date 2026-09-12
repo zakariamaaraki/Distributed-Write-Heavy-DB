@@ -560,6 +560,41 @@ SQL transactions keep the normal BEGIN, statement, and COMMIT contract. A one-ta
 
 Example: BEGIN, insert into user, insert into account, then COMMIT. The coordinator discovers both table leaders, prepares both participants, and commits both batches.
 
+### Coordinator selection and failure behavior
+
+The coordinator is the node that receives the transaction creation request; it
+is not separately elected by Raft. For SQL, the Router remembers the node that
+received `BEGIN` and routes `COMMIT`/`ROLLBACK` back to that node. For the
+explicit distributed-transaction API, the node receiving
+`POST /distributed-transactions` owns the coordinator state.
+
+At commit, the coordinator groups staged writes by table, discovers each
+current table leader through `/raft/tables/{table}/state`, groups tables led by
+the same node, prepares every participant, journals `committing`, and then
+sends commit to every prepared participant:
+
+```text
+Client -> Router -> coordinator
+                     |
+                     +-> discover table1 leader -> prepare -> commit
+                     +-> discover table2 leader -> prepare -> commit
+```
+
+If the coordinator fails before prepare, the client sees a failed request and
+no prepared value should be visible. If it fails during prepare, some
+participants may remain prepared but invisible. If it fails after the
+`committing` decision is journaled, some participants may commit while others
+remain prepared; the result is `in-doubt` until the durable decision is
+recovered.
+
+There is currently no coordinator election or automatic coordinator failover.
+The internal HTTP client has an infinite timeout, so a hung participant call
+is not automatically detected by a configured phase timeout. The coordinator
+journal and local recovery can replay durable committing work known to that
+node, but they do not yet provide complete cluster-wide recovery after
+permanent coordinator loss. The one-hour cleanup task expires abandoned active
+transactions; it does not safely abort transactions that already passed
+prepare.
 ### 2PC happy path
 
 ![2PC happy path](./docs/distributed-transaction-happy-path.svg?raw=true)

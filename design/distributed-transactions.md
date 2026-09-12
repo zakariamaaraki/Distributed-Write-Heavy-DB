@@ -81,6 +81,57 @@ all participants. Each participant applies its grouped batch through the normal
 same storage path as a local committed batch. A successful response is returned
 only after all commit calls succeed.
 
+## Coordinator selection and failure algorithm
+
+The coordinator is not elected by Raft. It is the node that receives the
+transaction creation request. For SQL, the Router remembers the node that
+received `BEGIN` and routes that transaction's `COMMIT` or `ROLLBACK` back to
+it. For the explicit distributed-transaction API, the node that receives
+`POST /distributed-transactions` owns the coordinator state.
+
+At commit, the coordinator discovers participants independently for each table:
+
+```text
+1. Group staged writes by table.
+2. Query every configured node for /raft/tables/{table}/state.
+3. Select the node reporting the current leader for that table.
+4. Group tables led by the same node into one participant request.
+5. Prepare every participant.
+6. Persist the committing decision.
+7. Commit every prepared participant.
+8. Return committed only after every participant acknowledges.
+```
+
+The failure behavior is phase-dependent:
+
+```text
+Before prepare:
+  no participant is visible; the transaction can abort.
+
+During prepare:
+  some participants may be prepared while others are not;
+  prepared values remain invisible and must not guess abort or commit.
+
+After committing is journaled:
+  the coordinator must recover the commit decision; some participants
+  may have committed while others remain prepared.
+```
+
+The current implementation has no coordinator election or automatic
+coordinator failover. The internal `HttpClient` uses an infinite timeout, so a
+hung request is not automatically converted into a timeout-based failure;
+connection failure or caller cancellation can still interrupt the request. A
+phase-two failure is reported as `in-doubt` when the coordinator knows the
+outcome is uncertain. The coordinator journal is process-local and contains
+prepared writes and decisions, but not a replicated coordinator log or a full
+remote participant recovery plan. Restart recovery can replay durable
+`committing` work known locally; it does not yet provide complete cluster-wide
+recovery if the coordinator node is permanently lost.
+
+The one-hour cleanup task expires abandoned active coordinator transactions.
+It is not a substitute for a 2PC decision timeout: after prepare, participants
+must wait for the durable commit/abort decision rather than abort merely
+because the coordinator is unreachable.
 ## Success and failure cases
 
 | Situation | Coordinator action | Result |
