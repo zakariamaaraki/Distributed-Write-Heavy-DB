@@ -105,6 +105,38 @@ mistake a partial failure for a successful atomic commit. A production hardening
 step is to persist coordinator decisions and participant prepared records and add
 recovery/status polling; the participant API is separated to support that step.
 
+## Three-phase commit (3PC) comparison
+
+Three-phase commit adds a `PreCommit` phase between the normal prepare and
+commit phases:
+
+```text
+CanCommit? -> PreCommit -> DoCommit
+```
+
+Participants first vote on whether they can commit. If all vote yes, the
+coordinator records and broadcasts `PreCommit`, then later broadcasts
+`DoCommit`. The intermediate state is designed to let a participant infer
+whether commit is safe after some coordinator failures, reducing the blocking
+window that exists in 2PC.
+
+3PC is useful only under stronger assumptions: participants and the
+coordinator must be known, message delays and failures must be sufficiently
+bounded for timeouts to be meaningful, and avoiding coordinator blocking must
+justify the extra round trip and state machine. It is not a substitute for
+consensus and does not safely solve arbitrary network partitions or unreliable
+failure detection.
+
+This implementation uses 2PC intentionally. Its coordinator and participants
+persist decisions and prepared write sets, requests are idempotent, recovery
+replays durable `committing` decisions, and the API reports `in-doubt` instead
+of hiding uncertainty. That is enough for the current cross-table atomicity
+requirement. 3PC would add a durable `pre-commit` state and another round trip,
+but would not merge the independent table Raft groups into one consensus group
+or provide a global sequence. It should be considered only if coordinator
+blocking becomes a measured operational bottleneck and the deployment can
+satisfy 3PC's timing and failure assumptions.
+
 ## Atomicity boundary
 
 The atomicity boundary is the set of participant batches selected during prepare.

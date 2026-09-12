@@ -584,6 +584,49 @@ Example: BEGIN, insert into user, insert into account, then COMMIT. The coordina
 
 The complete protocol, atomicity boundary, recovery model, and failure matrix are documented in [design/distributed-transactions.md](./design/distributed-transactions.md).
 
+### 3PC: when it is useful and why this project uses 2PC
+
+Three-phase commit (3PC) is a refinement of two-phase commit intended to
+reduce the period in which participants can remain blocked when the
+coordinator fails. Its phases are:
+
+```text
+1. CanCommit?  -> participants vote yes/no
+2. PreCommit   -> coordinator tells participants that commit is inevitable
+3. DoCommit    -> participants make the values visible
+```
+
+The extra `PreCommit` state gives participants more information about whether
+it is safe to proceed after a coordinator failure. Under its timing and failure
+assumptions, a participant can use timeouts and state to avoid waiting forever
+for the coordinator's final decision. 3PC is appropriate when a system has a
+small, known participant set, bounded network delays and failure detection, and
+non-blocking commit is more important than the extra round trip and protocol
+complexity.
+
+3PC is not a general replacement for consensus. Network partitions, delayed
+messages, coordinator/participant recovery, and inaccurate failure detection
+can still make the assumptions unsafe. It also does not provide a global
+ordering service or replace Raft. Systems that must tolerate arbitrary network
+partitions usually combine consensus, replicated logs, or application-specific
+recovery rather than relying on 3PC alone.
+
+This project deliberately uses 2PC because it is sufficient for the current
+cross-table transaction model. The coordinator already journals its decision,
+participants durably journal prepared writes, phase requests are idempotent,
+and recovery exposes an explicit `in-doubt` result instead of claiming success
+when the outcome is unknown. The table leaders are already replicated by their
+individual Raft groups, and the project does not require a non-blocking commit
+under coordinator failure. Adding 3PC would add another durable participant
+state and another network round without solving the separate problem that
+independent table Raft groups do not form one global consensus group.
+
+Use 2PC here when one transaction must atomically update tables led by
+different nodes. 3PC would become worth evaluating only if measured
+coordinator-blocking time became a dominant operational problem and the
+cluster could enforce the stronger timing, failure-detection, and recovery
+assumptions that 3PC needs.
+
 ## Data Model
 
 The database stores named tables. Each table is an independent key/value LSM
