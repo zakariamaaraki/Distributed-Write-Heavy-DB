@@ -334,7 +334,7 @@ is deterministic even when machines have clock skew. See the [bounded-staleness
 design](./design/bounded-staleness.md) for the routing algorithm and the
 trade-offs of a future time-based bound.
 
-### Session consistency: monotonic reads and consistent prefixes
+### Session consistency: monotonic reads, causal ordering, and consistent prefixes
 
 The `session` consistency mode provides more continuity than ordinary eventual
 reads without requiring every request to use the leader. `monotonic` and
@@ -390,6 +390,39 @@ Think: **“I should not see effects before their causes.”** In this database,
 the same per-table sequence floor provides this ordering: if sequence `120` is
 visible, the Router will not send the next session read to a replica at `119`.
 The implementation does not claim a separate cross-table prefix protocol.
+
+**3. Causal ordering for a session**
+
+Together, monotonic reads and consistent prefixes provide a useful form of
+causal ordering within a table: when one operation has already observed the
+result of an earlier operation, later reads in that session will not move
+backward or expose the later effect while hiding the earlier one. This is a
+session guarantee, not a globally ordered view for every client. The current
+implementation carries the per-table sequence token through
+`X-Read-After-Sequence`; it does not implement a full cross-table causal
+dependency tracker.
+
+A chat application is a good example. Suppose Alice sends two messages:
+
+```text
+M1: Alice sends "Are we still on for dinner?"
+M2: Alice sends "I will book the table."
+```
+
+After the chat session has seen `M2`, it must not later display `M1` as
+missing, and it should not show `M2` before `M1`. Session consistency gives the
+conversation that natural order while allowing reads to use a caught-up
+replica instead of routing every message-history read to the leader. A small
+replication delay is acceptable because the user is not asking whether the
+entire system has one immediate, globally agreed answer; they need their own
+conversation to remain coherent.
+
+This use case does **not** need linearizability. Linearizability would require
+each read and write to appear to take effect atomically in real time for all
+clients, which adds coordination and latency. Use strong/leader-routed reads
+instead when the answer must reflect the latest committed state immediately,
+such as confirming a payment, enforcing a unique allocation, or showing an
+account balance after a transfer.
 
 `session`, `monotonic`, and `consistent-prefix` all require a replica at or
 beyond the client's sequence token. If no healthy replica has reached it, the
@@ -1414,6 +1447,69 @@ events delivered through the open SSE connection. This lets disconnected followe
 replica can resume from the same sequence after restart. Change-log events carry
 the table name, so followers create missing tables and apply each event to the
 matching table-local LSM tree.
+The stream is global to the leader's change-log namespace even though the
+replication checkpoint is maintained per table. For example, if one leader
+hosts two tables:
+
+```text
+Leader A change log:
+
+sequence 5 -> table1
+sequence 6 -> table2
+sequence 7 -> table1
+sequence 8 -> table2
+```
+
+A follower worker for `table1` reconnecting from sequence `5` receives the
+shared stream, applies sequences `5` and `7`, and ignores the `table2` events:
+
+```text
+Follower table1 worker:
+
+sequence 5 -> table1 -> apply
+sequence 6 -> table2 -> ignore
+sequence 7 -> table1 -> apply
+sequence 8 -> table2 -> ignore
+```
+
+A worker for `table2` has its own table checkpoint and performs the symmetric
+filtering. The request does not send a checkpoint to every shard, and a
+sequence token is not ambiguous inside the worker: the worker already knows
+which table it is replicating. The token means "resume this table's worker at
+this position in the shared leader stream."
+
+If the follower needs both tables from the same leader, the current
+implementation creates two per-table workers and therefore may open two
+streams that read the same changelog events:
+
+```text
+                 shared leader stream
+                         |
+              +----------+----------+
+              |                     |
+       table1 worker            table2 worker
+       apply table1             apply table2
+       ignore table2             ignore table1
+```
+
+This can duplicate network and parsing work, but it does not duplicate rows:
+each worker filters by table, and each table-local store rejects an already
+applied sequence. The current design therefore favors table-level leadership
+and simple recovery over one multiplexed shard-level stream. A future
+optimization could open one stream per follower/leader pair and dispatch each
+change event to the appropriate table worker:
+
+```text
+Follower opens one stream from sequence 5
+                         |
+                 event dispatcher
+                    /          \
+             table1 state   table2 state
+```
+
+That optimization would remove redundant stream reads while retaining
+per-table applied state and table-local leadership. It would not, by itself,
+create a globally unique sequence authority across independent leaders.
 
 Writes are gated at the API layer. Direct `PUT`/`DELETE`, transactional writes,
 transaction commits, SQL writes, and SQL transaction control require the node to

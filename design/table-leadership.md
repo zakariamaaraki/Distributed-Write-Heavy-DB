@@ -138,6 +138,31 @@ leader snapshot and change stream.
 Each table leader appends committed writes to the table WAL and publishes a
 change event containing the table name and global event sequence. Followers
 subscribe from their last table sequence and apply only events for that table.
+The `/changes/stream` endpoint is a shared changelog stream, not a stream that
+contains only the requested table. A table replication worker supplies its own
+last applied sequence, receives the shared stream from that point, applies
+matching events, and filters out events for other tables. For example:
+
+```text
+Leader A:
+  sequence 5 -> table1
+  sequence 6 -> table2
+  sequence 7 -> table1
+  sequence 8 -> table2
+
+Follower table1 worker from 5:
+  5 table1 -> apply
+  6 table2 -> ignore
+  7 table1 -> apply
+  8 table2 -> ignore
+```
+
+When the same follower needs both tables from the same leader, the current
+per-table workers can consume the same changelog events independently. This
+means the implementation can perform redundant network and parsing work, but
+filtering and table-local sequence checks prevent duplicate rows. A future
+shard-level multiplexed stream could demultiplex one stream into multiple
+table workers without changing the per-table leadership model.
 
 When a node joins or a failure is detected:
 
